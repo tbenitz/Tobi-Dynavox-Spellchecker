@@ -39,7 +39,7 @@ jobs:
       contents: write
     env:
       GH_TOKEN: ${{ github.token }}
-      RELEASE_TAG: v0.2.0
+      RELEASE_TAG: v0.3.0
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -54,6 +54,6 @@ jobs:
           git archive --format=zip --prefix=Tobi-Dynavox-Spellchecker/ HEAD -- . ':!docs/downloads' > dist/Tobi-Dynavox-Spellchecker-source.zip
           (cd dist && sha256sum Tobi-Dynavox-Spellchecker.exe Tobi-Dynavox-Spellchecker-source.zip > SHA256SUMS.txt)
           gh release create "$RELEASE_TAG" --target "$GITHUB_SHA" --prerelease \
-            --title "v0.2.0 — TD Snap eye-gaze preview" \
-            --notes "Windows Spell Checking by default, six optional local models, and a TD Snap button workflow on compatible writable fields. TD Snap write-back and eye-gaze selection have not been tested on physical Tobii Dynavox hardware." \
+            --title "v0.3.0 — DeepSeek and Grok preview" \
+            --notes "Windows spelling remains the default. Adds optional DeepSeek and Grok with per-draft confirmation, encrypted API keys, and a Windows spelling fallback. Existing TD Snap button setup is unchanged. TD Snap write-back and eye-gaze selection have not been tested on physical Tobii Dynavox hardware." \
             dist/Tobi-Dynavox-Spellchecker.exe dist/Tobi-Dynavox-Spellchecker-source.zip dist/SHA256SUMS.txt

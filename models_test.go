@@ -6,7 +6,7 @@ import (
 )
 
 func TestEngineCatalog(t *testing.T) {
-	want := []string{"windows", "neu-bert", "neu-lstm", "bart", "t5", "mt5", "tiny"}
+	want := []string{"windows", "neu-bert", "neu-lstm", "bart", "t5", "mt5", "tiny", "deepseek", "grok"}
 	if len(engines) != len(want) {
 		t.Fatalf("catalog has %d entries", len(engines))
 	}
@@ -14,6 +14,12 @@ func TestEngineCatalog(t *testing.T) {
 		if e := engineAt(i); e.id != id || e.label == "" {
 			t.Fatalf("engine %d: %+v", i, e)
 		}
+		if engineIndex(id) != i {
+			t.Fatalf("incorrect selector index for %q", id)
+		}
+	}
+	if engineIndex("unknown") != 0 {
+		t.Fatal("unknown engine should return to Windows")
 	}
 	for _, i := range []int{-1, len(want)} {
 		if engineAt(i).id != "windows" {

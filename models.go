@@ -16,6 +16,8 @@ var engines = [...]engine{
 	{"t5", "T5-large-spell (16 GB RAM recommended)"},
 	{"mt5", "SAGE mT5 Large (16 GB RAM recommended)"},
 	{"tiny", "Spell Correct Transformer (single-word, experimental)"},
+	{"deepseek", "DeepSeek (cloud, API key required)"},
+	{"grok", "Grok (cloud, API key required)"},
 }
 
 func engineAt(i int) engine {
@@ -23,6 +25,15 @@ func engineAt(i int) engine {
 		return engines[0]
 	}
 	return engines[i]
+}
+
+func engineIndex(id string) int {
+	for i, e := range engines {
+		if e.id == id {
+			return i
+		}
+	}
+	return 0
 }
 
 func modelPreview(draft, result string) (string, int, error) {

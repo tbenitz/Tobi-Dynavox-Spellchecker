@@ -101,15 +101,21 @@ const (
 	idKeep
 	idGaze
 	idGazeFallback
+	idCloudSend
+	idCloudKeyLabel
+	idCloudKey
+	idCloudSave
+	idCloudRemove
 )
 
 type task struct {
-	kind    int
-	at      *point
-	s       string
-	engine  engine
-	source  uintptr
-	profile gazeProfile
+	kind     int
+	at       *point
+	s        string
+	engine   engine
+	source   uintptr
+	profile  gazeProfile
+	approved bool
 }
 type result struct {
 	kind                      int
@@ -117,6 +123,7 @@ type result struct {
 	checked, attached, undo   bool
 	err                       error
 	profile                   gazeProfile
+	cloudPending              bool
 }
 
 var jobs = make(chan task, 1)
@@ -150,7 +157,17 @@ func worker(hwnd uintptr) {
 		gazeSource = 0
 	}
 	defer detach()
-	check := func(e engine, s string) (string, int, error) {
+	check := func(e engine, s string, approved bool) (string, int, error) {
+		if p, cloud := providerFor(e.id); cloud {
+			if !approved {
+				return "", 0, fmt.Errorf("Send this draft explicitly to use %s.", p.name)
+			}
+			key, err := readCloudKey(p)
+			if err != nil {
+				return "", 0, fmt.Errorf("Save a %s API key in the main spellchecker window, or use Windows spelling.", p.name)
+			}
+			return spellCloud(appModelContext, cloudHTTP, p, key, s, approved)
+		}
 		if e.id != "windows" {
 			return spellModel(appModelContext, e, s, func(message string) {
 				select {
@@ -213,9 +230,13 @@ func worker(hwnd uintptr) {
 				break
 			}
 			out.original = capturedText
+			if _, cloud := providerFor(j.engine.id); cloud {
+				out.cloudPending = true
+				break
+			}
 			out.preview = capturedText
 			var n int
-			proposed, n, err := check(j.engine, capturedText)
+			proposed, n, err := check(j.engine, capturedText, false)
 			if err != nil {
 				out.err = err
 				break
@@ -223,16 +244,24 @@ func worker(hwnd uintptr) {
 			out.preview = proposed
 			out.checked = true
 			out.status = checkStatus(j.engine, n, true)
-		case idCheck, idGazeFallback:
+		case idCheck, idGazeFallback, idCloudSend:
 			var n int
-			if j.kind == idGazeFallback {
+			if j.kind == idGazeFallback || j.kind == idCloudSend {
 				if field == nil || gazeSource == 0 {
 					out.err = fmt.Errorf("The AAC draft is no longer linked. Return to AAC and try again.")
 					break
 				}
 				j.s = capturedText
 			}
-			out.preview, n, out.err = check(j.engine, j.s)
+			if j.approved && field != nil {
+				current, err := field.read()
+				if err != nil || current != capturedText {
+					out.err = fmt.Errorf("The AAC draft changed. Nothing was sent. Return to AAC and check the latest draft.")
+					break
+				}
+				j.s = capturedText
+			}
+			out.preview, n, out.err = check(j.engine, j.s, j.approved)
 			out.checked = out.err == nil
 			out.status = checkStatus(j.engine, n, field != nil)
 		case idApply:
@@ -323,6 +352,7 @@ var hwnd, instance, font, larger uintptr
 var busy, holding, attached, undo, previewValid, updating, hotkeyOK bool
 var gazeMode, closingReview, applyingReview bool
 var gazeModelFailed bool
+var gazeCloudPending bool
 var gazeEngineID string
 var pendingCapture = idCapture
 var profile gazeProfile
@@ -412,6 +442,7 @@ func initControls(h uintptr) {
 		widget(h, idApply, "BUTTON", "Use correction", 0x10000, 0, larger)
 		widget(h, idKeep, "BUTTON", "Keep original", 0x10000, 0, larger)
 		widget(h, idGazeFallback, "BUTTON", "Use Windows spelling", 0x10000, 0, larger)
+		widget(h, idCloudSend, "BUTTON", "Send draft", 0x10000, 0, larger)
 		for _, id := range []int{idInput, idOutput} {
 			send.Call(controls[id], 0xC5, maxDraft, 0)
 		}
@@ -423,16 +454,17 @@ func initControls(h uintptr) {
 	widget(h, idOriginal, "STATIC", "Original draft", 0, 0, font)
 	widget(h, idEngineLabel, "STATIC", "&Spelling engine", 0, 0, font)
 	widget(h, idEngine, "COMBOBOX", "", 0x210003, 0, font) // tab stop, scroll, dropdown list
-	selection := 0
-	for i, e := range engines {
+	for _, e := range engines {
 		send.Call(controls[idEngine], 0x143, 0, uintptr(unsafe.Pointer(wide(e.label))))
-		if e.id == profile.Engine {
-			selection = i
-		}
 	}
-	send.Call(controls[idEngine], 0x14e, uintptr(selection), 0)
+	send.Call(controls[idEngine], 0x14e, uintptr(engineIndex(profile.Engine)), 0)
 	widget(h, idPreview, "STATIC", "Review and edit the correction", 0, 0, font)
 	widget(h, idStatus, "STATIC", "Offline English (US) spelling. This app does not press Speak.", 0, 0, font)
+	widget(h, idCloudKeyLabel, "STATIC", "API &key", 0, 0, font)
+	widget(h, idCloudKey, "EDIT", "", 0x100a0, 0x200, font) // ES_PASSWORD and tab stop
+	send.Call(controls[idCloudKey], 0xC5, 512, 0)
+	widget(h, idCloudSave, "BUTTON", "Sa&ve key", 0x10000, 0, font)
+	widget(h, idCloudRemove, "BUTTON", "&Remove key", 0x10000, 0, font)
 	for _, b := range []struct {
 		id    int
 		label string
@@ -446,6 +478,9 @@ func initControls(h uintptr) {
 	widget(h, idOutput, "EDIT", "", 0x211044, 0x200, font)
 	for _, id := range []int{idInput, idOutput} {
 		send.Call(controls[id], 0xC5, maxDraft, 0)
+	}
+	if p, cloud := providerFor(profile.Engine); cloud {
+		status(p.name + " is a cloud engine. Drafts are sent only when you confirm.")
 	}
 	syncControls()
 }
@@ -479,17 +514,27 @@ func layout(h uintptr) {
 		// Keep fallback and Apply at different coordinates. A lingering
 		// dwell over a fallback button must not approve its new result.
 		box(idGazeFallback, w-20-b, 196+part, b, 66)
+		box(idCloudSend, 20, 196+part, b, 66)
 		return
 	}
 	box(idHeader, 16, 12, w-32, 31)
 	box(idHelp, 16, 48, w-32, 43)
 	box(idEngineLabel, 16, 97, 130, 23)
 	box(idEngine, 152, 94, w-168, 270)
-	row(135, idLink, idCapture, idPaste, idCheck)
-	panel := max(42, (v-356)/2)
-	box(idOriginal, 16, 186, w-32, 23)
-	box(idInput, 16, 211, w-32, panel)
-	py := 217 + panel
+	_, cloud := providerFor(selectedEngine().id)
+	extra := 0
+	if cloud {
+		extra = 49
+		box(idCloudKeyLabel, 16, 142, 90, 24)
+		box(idCloudKey, 110, 132, w-376, 38)
+		box(idCloudSave, w-256, 132, 112, 38)
+		box(idCloudRemove, w-136, 132, 120, 38)
+	}
+	row(135+extra, idLink, idCapture, idPaste, idCheck)
+	panel := max(42, (v-356-extra)/2)
+	box(idOriginal, 16, 186+extra, w-32, 23)
+	box(idInput, 16, 211+extra, w-32, panel)
+	py := 217 + extra + panel
 	box(idPreview, 16, py, w-32, 23)
 	box(idOutput, 16, py+25, w-32, panel)
 	row(v-100, idApply, idUndo, idCopy, idClear)
@@ -569,25 +614,36 @@ func wndProc(h uintptr, m uint32, w, l uintptr) uintptr {
 			closeReview(h)
 			return 0
 		}
-		if gazeMode && id == idGazeFallback && l != 0 && n == 0 && !busy && gazeModelFailed {
+		if gazeMode && id == idGazeFallback && l != 0 && n == 0 && !busy && (gazeModelFailed || gazeCloudPending) {
 			start(task{kind: idGazeFallback})
+			return 0
+		}
+		if gazeMode && id == idCloudSend && l != 0 && n == 0 && !busy && gazeCloudPending {
+			start(task{kind: idCloudSend, approved: true})
 			return 0
 		}
 		if id == idEngine && n == 1 && !busy && !holding { // CBN_SELCHANGE
 			next := profile
 			next.Engine = selectedEngine().id
 			if err := saveProfile(next); err != nil {
-				status("Engine choice could not be saved for the AAC button.")
+				// Preserve the old provider and its input together. A key typed
+				// for one service must never be saved against another service.
+				send.Call(controls[idEngine], 0x14e, uintptr(engineIndex(profile.Engine)), 0)
+				status("The engine choice could not be changed because Windows could not save it.")
 				return 0
 			}
 			profile = next
 			setBox(idOutput, "")
+			setBox(idCloudKey, "")
 			previewValid = false
-			if selectedEngine().id == "windows" {
+			if p, cloud := providerFor(next.Engine); cloud {
+				status(p.name + " requires an API key and internet. Your draft is sent only when you confirm.")
+			} else if next.Engine == "windows" {
 				status("Windows Spell Checking selected. No download needed.")
 			} else {
 				status("The selected model runs locally. On the first check, the app downloads missing files.")
 			}
+			layout(h)
 			syncControls()
 			return 0
 		}
@@ -599,7 +655,7 @@ func wndProc(h uintptr, m uint32, w, l uintptr) uintptr {
 			}
 			syncControls()
 		}
-		if l != 0 && n == 0 && !busy && !holding && (id >= idCapture && id <= idClear || id == idLink) {
+		if l != 0 && n == 0 && !busy && !holding && (id >= idCapture && id <= idClear || id == idLink || id == idCloudSave || id == idCloudRemove) {
 			action(h, id)
 			return 0
 		}
@@ -644,10 +700,19 @@ func start(t task) {
 	if gazeMode {
 		gazeEngineID = t.engine.id
 		gazeModelFailed = false
+		gazeCloudPending = false
 	}
 	busy = true
 	applyingReview = t.kind == idApply
-	status("Working…")
+	if t.approved {
+		setBox(idOutput, "")
+		previewValid = false
+		if p, cloud := providerFor(t.engine.id); cloud {
+			status("Waiting for " + p.name + "…")
+		}
+	} else {
+		status("Working…")
+	}
 	syncControls()
 	jobs <- t
 }
@@ -675,8 +740,9 @@ func finish(r result) {
 		return
 	}
 	attached, undo = r.attached, r.undo
-	if r.kind == idGaze || r.kind == idGazeFallback {
+	if r.kind == idGaze || r.kind == idGazeFallback || r.kind == idCloudSend {
 		gazeModelFailed = r.err != nil && r.attached && gazeEngineID != "windows"
+		gazeCloudPending = r.cloudPending
 	}
 	if r.kind == idCapture || r.kind == idGaze || r.kind == idPaste || r.kind == idClear {
 		setBox(idInput, r.original)
@@ -686,8 +752,8 @@ func finish(r result) {
 			activateApp()
 		}
 	}
-	if r.err == nil && (r.kind == idCheck || r.kind == idApply || r.kind == idUndo || r.kind == idGazeFallback) {
-		if r.kind != idCheck && r.kind != idGazeFallback {
+	if r.err == nil && (r.kind == idCheck || r.kind == idApply || r.kind == idUndo || r.kind == idGazeFallback || r.kind == idCloudSend) {
+		if r.kind != idCheck && r.kind != idGazeFallback && r.kind != idCloudSend {
 			setBox(idInput, r.original)
 		}
 		setBox(idOutput, r.preview)
@@ -700,7 +766,15 @@ func finish(r result) {
 		status(r.err.Error())
 	} else {
 		message := r.status
-		if r.kind == idGaze || r.kind == idGazeFallback {
+		if r.cloudPending {
+			p, _ := providerFor(selectedEngine().id)
+			if gazeMode {
+				message = "Send this draft to " + p.name + " for proofreading, or use Windows spelling to keep it on this device."
+				setBox(idCloudSend, "Send to "+p.name)
+			} else {
+				message = "Draft captured. Choose Check spelling to review before sending it to " + p.name + "."
+			}
+		} else if r.kind == idGaze || r.kind == idGazeFallback || r.kind == idCloudSend {
 			message = "Review the suggestion. Use correction writes it back to your AAC draft."
 			if textBox(idInput) == textBox(idOutput) {
 				message = "No spelling changes suggested. Choose Keep original to return to AAC."
@@ -712,7 +786,7 @@ func finish(r result) {
 	if r.kind == idClear || r.kind == idPaste {
 		setFocus.Call(controls[idInput])
 	}
-	if r.kind == idGaze || r.kind == idGazeFallback {
+	if r.kind == idGaze || r.kind == idGazeFallback || r.kind == idCloudSend {
 		setFocus.Call(controls[idKeep])
 	}
 	if r.kind == idCapture || r.kind == idCheck {
@@ -736,14 +810,20 @@ func syncControls() {
 			busy: !idle, attached: attached, valid: previewValid, modelFailed: gazeModelFailed,
 			draft: draft, proposal: corrected, engineID: gazeEngineID,
 		}).actions()
+		sendCloud := idle && attached && gazeCloudPending && strings.TrimSpace(draft) != ""
+		fallback = fallback || sendCloud
 		on(idApply, apply)
 		on(idGazeFallback, fallback)
+		on(idCloudSend, sendCloud)
+		show.Call(controls[idCloudSend], windowVisibility(sendCloud))
 		if fallback {
 			show.Call(controls[idOutput], 0)
+			show.Call(controls[idPreview], 0)
 			show.Call(controls[idGazeFallback], 8) // SW_SHOWNA
 		} else {
 			show.Call(controls[idGazeFallback], 0)
 			show.Call(controls[idOutput], 8)
+			show.Call(controls[idPreview], 8)
 		}
 		send.Call(controls[idInput], 0xCF, 1, 0)
 		var readOnly uintptr
@@ -757,6 +837,11 @@ func syncControls() {
 		on(id, idle)
 	}
 	on(idEngine, idle)
+	_, cloud := providerFor(selectedEngine().id)
+	for _, id := range []int{idCloudKeyLabel, idCloudKey, idCloudSave, idCloudRemove} {
+		show.Call(controls[id], windowVisibility(cloud))
+		on(id, cloud && idle)
+	}
 	on(idCheck, idle && strings.TrimSpace(draft) != "")
 	on(idApply, idle && attached && have && corrected != draft)
 	on(idUndo, idle && attached && undo)
@@ -770,6 +855,13 @@ func syncControls() {
 	}
 	readonly(idInput, attached || !idle)
 	readonly(idOutput, !idle || (!previewValid && strings.TrimSpace(draft) == ""))
+}
+
+func windowVisibility(visible bool) uintptr {
+	if visible {
+		return 8
+	} // SW_SHOWNA
+	return 0
 }
 
 func action(h uintptr, id int) {
@@ -802,7 +894,37 @@ func action(h uintptr, id int) {
 		}
 		start(task{kind: idPaste, s: s})
 	case idCheck:
-		start(task{kind: idCheck, s: textBox(idInput)})
+		draft := textBox(idInput)
+		p, cloud := providerFor(selectedEngine().id)
+		if cloud {
+			holding = true
+			answer, _, _ := msgBox.Call(h, uintptr(unsafe.Pointer(wide("Send this draft to "+p.name+" over the internet for proofreading? Choose No to keep it on this device."))), uintptr(unsafe.Pointer(wide("Send draft to "+p.name+"?"))), 0x124) // Yes/No, default No
+			holding = false
+			if answer != 6 {
+				status("No draft was sent.")
+				return
+			}
+		}
+		start(task{kind: idCheck, s: draft, approved: cloud})
+	case idCloudSave, idCloudRemove:
+		p, cloud := providerFor(selectedEngine().id)
+		if !cloud {
+			return
+		}
+		if id == idCloudSave {
+			if err := saveCloudKey(p, strings.TrimSpace(textBox(idCloudKey))); err != nil {
+				status("The API key was not saved. Check the key and your Windows account.")
+				return
+			}
+			status(p.name + " API key saved. No draft was sent.")
+		} else {
+			if err := removeCloudKey(p); err != nil {
+				status("The saved API key could not be removed.")
+				return
+			}
+			status(p.name + " API key removed from this device.")
+		}
+		setBox(idCloudKey, "")
 	case idApply:
 		if gazeMode && (!attached || !previewValid) {
 			return
