@@ -212,3 +212,31 @@ func findGazeField(ui *com, w uintptr, p gazeProfile) (*captured, string, error)
 	}
 	return f, s, nil
 }
+
+// Keep an in-memory undo of only the last successful automatic edit. The
+// persisted link never contains a draft or correction.
+type autoRecord struct {
+	source              uintptr
+	profile             gazeProfile
+	field               *captured
+	original, corrected string
+}
+
+func (r *autoRecord) release() {
+	if r != nil && r.field != nil {
+		r.field.el.release()
+	}
+}
+func (r *autoRecord) verify(ui *com) error {
+	current, _, err := findGazeField(ui, r.source, r.profile)
+	if err != nil {
+		return err
+	}
+	defer current.el.release()
+	var same uint32
+	hr := ui.invoke(3, uintptr(unsafe.Pointer(r.field.el)), uintptr(unsafe.Pointer(current.el)), uintptr(unsafe.Pointer(&same)))
+	if !ok(hr) || same == 0 {
+		return errors.New("The linked AAC field changed. Nothing was written.")
+	}
+	return nil
+}

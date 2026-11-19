@@ -98,10 +98,8 @@ const (
 	idEngineLabel
 	idEngine
 	idLink
-	idKeep
-	idGaze
-	idGazeFallback
-	idCloudSend
+	idAuto
+	idAutoUndo
 	idCloudKeyLabel
 	idCloudKey
 	idCloudSave
@@ -123,7 +121,7 @@ type result struct {
 	checked, attached, undo   bool
 	err                       error
 	profile                   gazeProfile
-	cloudPending              bool
+	autoUndo                  bool
 }
 
 var jobs = make(chan task, 1)
@@ -143,8 +141,8 @@ func worker(hwnd uintptr) {
 	defer func() { ui.release(); sp.release() }()
 	var field *captured
 	var capturedText, undoText string
-	var gazeSource uintptr
-	var gazeTarget gazeProfile
+	var automaticUndo *autoRecord
+	defer func() { automaticUndo.release() }()
 	var canUndo bool
 	detach := func() {
 		if field != nil {
@@ -154,13 +152,12 @@ func worker(hwnd uintptr) {
 		capturedText = ""
 		canUndo = false
 		undoText = ""
-		gazeSource = 0
 	}
 	defer detach()
 	check := func(e engine, s string, approved bool) (string, int, error) {
 		if p, cloud := providerFor(e.id); cloud {
 			if !approved {
-				return "", 0, fmt.Errorf("Send this draft explicitly to use %s.", p.name)
+				return "", 0, fmt.Errorf("Start a spelling check explicitly to use %s.", p.name)
 			}
 			key, err := readCloudKey(p)
 			if err != nil {
@@ -189,38 +186,105 @@ func worker(hwnd uintptr) {
 		}
 		return propose(sp, s)
 	}
+	ensureUI := func() error {
+		if !ready {
+			return fmt.Errorf("Windows accessibility services did not start.")
+		}
+		if ui == nil {
+			var err error
+			ui, err = makeCOM(&uiaClass, &uiaIID)
+			return err
+		}
+		return nil
+	}
 	for j := range jobs {
 		out := result{kind: j.kind}
 		switch j.kind {
-		case idCapture, idLink, idGaze:
-			detach()
-			if !ready {
-				out.err = fmt.Errorf("Windows accessibility services did not start.")
+		case idAuto:
+			if out.err = ensureUI(); out.err != nil {
 				break
 			}
-			if ui == nil {
-				ui, out.err = makeCOM(&uiaClass, &uiaIID)
+			if j.source == 0 || activeRoot() != j.source {
+				out.err = fmt.Errorf("The linked AAC window is no longer active. No text was changed.")
+				break
+			}
+			f, original, err := findGazeField(ui, j.source, j.profile)
+			if err != nil {
+				out.err = err
+				break
+			}
+			record := &autoRecord{source: j.source, profile: j.profile, field: f, original: original}
+			var changed bool
+			record.corrected, changed, out.err = autoCorrect(f, original, func(draft string) (string, error) {
+				if activeRoot() != j.source || appModelContext.Err() != nil {
+					return "", fmt.Errorf("The linked AAC window is no longer active. No draft was sent or changed.")
+				}
+				fresh, err := f.read()
+				if err != nil || fresh != original || activeRoot() != j.source {
+					return "", fmt.Errorf("The draft changed before checking. No draft was sent or changed.")
+				}
+				// Pressing the TD Snap action is the request to check this one
+				// draft using the selected engine and saved credentials.
+				preview, _, err := check(j.engine, draft, true)
+				return preview, err
+			}, func() error {
+				if appModelContext.Err() != nil || activeRoot() != j.source {
+					return fmt.Errorf("The AAC window changed. The correction was not applied.")
+				}
+				if err := record.verify(ui); err != nil {
+					return err
+				}
+				if activeRoot() != j.source {
+					return fmt.Errorf("The AAC window changed. The correction was not applied.")
+				}
+				return nil
+			})
+			if changed {
+				automaticUndo.release()
+				automaticUndo = record
+				out.status = "Corrected the AAC draft."
+			} else if mayHaveWritten(out.err) {
+				// Windows may have written the proposal even when read-back
+				// failed. Undo still verifies identity and exact text.
+				automaticUndo.release()
+				automaticUndo = record
+			} else {
+				record.release()
+				out.status = "No spelling changes."
+			}
+		case idAutoUndo:
+			if automaticUndo == nil {
+				out.err = fmt.Errorf("There is no automatic correction to undo.")
+				break
+			}
+			if j.source != 0 && (activeRoot() != j.source || j.source != automaticUndo.source) {
+				out.err = fmt.Errorf("The window does not match the last corrected AAC draft.")
+				break
+			}
+			if out.err = automaticUndo.verify(ui); out.err == nil {
+				out.err = writeReviewed(automaticUndo.field, automaticUndo.corrected, automaticUndo.original)
 			}
 			if out.err != nil {
 				break
 			}
-			switch j.kind {
-			case idLink:
+			automaticUndo.release()
+			automaticUndo = nil
+			out.status = "Restored the original AAC draft."
+		case idCapture, idLink:
+			detach()
+			if out.err = ensureUI(); out.err != nil {
+				break
+			}
+			if j.kind == idLink {
 				if j.at == nil {
 					out.err = fmt.Errorf("Point at the AAC Message Window to link it.")
 					break
 				}
 				out.profile, out.err = bindGazeField(ui, *j.at, j.profile)
-				out.status = "AAC field linked. Now add the Spell Check button to your AAC page."
-			case idGaze:
-				field, capturedText, out.err = findGazeField(ui, j.source, j.profile)
-				gazeSource, gazeTarget = j.source, j.profile
-			default:
-				field, capturedText, out.err = getField(ui, j.at)
-			}
-			if j.kind == idLink {
+				out.status = "AAC field linked. Add the Spell Check button to your AAC page."
 				break
 			}
+			field, capturedText, out.err = getField(ui, j.at)
 			if out.err != nil {
 				break
 			}
@@ -231,7 +295,7 @@ func worker(hwnd uintptr) {
 			}
 			out.original = capturedText
 			if _, cloud := providerFor(j.engine.id); cloud {
-				out.cloudPending = true
+				out.status = "Draft captured. Choose Check spelling to check it with the selected cloud engine."
 				break
 			}
 			out.preview = capturedText
@@ -244,15 +308,8 @@ func worker(hwnd uintptr) {
 			out.preview = proposed
 			out.checked = true
 			out.status = checkStatus(j.engine, n, true)
-		case idCheck, idGazeFallback, idCloudSend:
+		case idCheck:
 			var n int
-			if j.kind == idGazeFallback || j.kind == idCloudSend {
-				if field == nil || gazeSource == 0 {
-					out.err = fmt.Errorf("The AAC draft is no longer linked. Return to AAC and try again.")
-					break
-				}
-				j.s = capturedText
-			}
 			if j.approved && field != nil {
 				current, err := field.read()
 				if err != nil || current != capturedText {
@@ -268,20 +325,6 @@ func worker(hwnd uintptr) {
 			if field == nil {
 				out.err = fmt.Errorf("No AAC field is attached. Use Copy correction and paste in AAC.")
 				break
-			}
-			if gazeSource != 0 {
-				current, _, err := findGazeField(ui, gazeSource, gazeTarget)
-				if err != nil {
-					out.err = err
-					break
-				}
-				var same uint32
-				hr := ui.invoke(3, uintptr(unsafe.Pointer(field.el)), uintptr(unsafe.Pointer(current.el)), uintptr(unsafe.Pointer(&same)))
-				current.el.release()
-				if !ok(hr) || same == 0 {
-					out.err = fmt.Errorf("The linked AAC field changed. Nothing was written.")
-					break
-				}
 			}
 			j.s = matchLineEndings(j.s, capturedText)
 			out.err = writeReviewed(field, capturedText, j.s)
@@ -319,6 +362,7 @@ func worker(hwnd uintptr) {
 		}
 		out.attached = field != nil
 		out.undo = canUndo
+		out.autoUndo = automaticUndo != nil
 		results <- out
 		post.Call(hwnd, wmDone, 0, 0)
 	}
@@ -350,53 +394,78 @@ func spellStatus(n int, attached bool) string {
 var controls = map[int]uintptr{}
 var hwnd, instance, font, larger uintptr
 var busy, holding, attached, undo, previewValid, updating, hotkeyOK bool
-var gazeMode, closingReview, applyingReview bool
-var gazeModelFailed bool
-var gazeCloudPending bool
-var gazeEngineID string
 var pendingCapture = idCapture
 var profile gazeProfile
-var gazeOrigin uintptr
+var autoUndoReady, exiting bool
 
 func main() {
 	runtime.LockOSThread()
 	setDPIAware.Call()
-	gazeMode = len(os.Args) == 2 && os.Args[1] == "--check"
-	var source uintptr
-	profile = loadProfile()
-	if gazeMode {
-		source, _, _ = foregroundWindow.Call()
-		gazeOrigin = source
-		lock, _, lockErr := createMutex.Call(0, 0, uintptr(unsafe.Pointer(wide(`Local\AACSpellcheckerReviewV1`))))
-		if lock == 0 || lockErr == syscall.Errno(183) {
+	action := uintptr(wmOpenSettings)
+	if len(os.Args) > 1 {
+		if len(os.Args) != 2 {
 			return
 		}
-		defer closeHandle.Call(lock)
+		switch os.Args[1] {
+		case "--check":
+			action = wmStartAuto
+		case "--undo":
+			action = wmStartUndo
+		default:
+			return
+		}
 	}
+	source := activeRoot()
+	var lock uintptr
+	for attempt := 0; attempt < 2; attempt++ {
+		var lockErr error
+		lock, _, lockErr = createMutex.Call(0, 0, uintptr(unsafe.Pointer(wide(`Local\AACSpellcheckerTrayHostV1`))))
+		if lock == 0 {
+			return
+		}
+		if lockErr != syscall.Errno(183) {
+			break
+		}
+		closeHandle.Call(lock)
+		lock = 0
+		if handoffExisting(action, source) {
+			return
+		}
+		// The first instance may have exited during handoff. If so, we
+		// can become the tray host without losing the original request.
+	}
+	if lock == 0 {
+		return
+	}
+	defer closeHandle.Call(lock)
+	profile = loadProfile()
 	instance, _, _ = getModule.Call(0)
 	c, _, _ := loadCursor.Call(0, 32512)
-	icon, _, _ := loadIcon.Call(0, 32512)
-	wc := wndClass{proc: syscall.NewCallback(wndProc), instance: instance, cursor: c, icon: icon, iconSmall: icon, background: 16, class: wide("AACSpellcheckerWindow")}
+	trayHIcon, _, _ = loadIcon.Call(0, 32512)
+	mid, _, _ := registerWindowMessage.Call(uintptr(unsafe.Pointer(wide("TaskbarCreated"))))
+	taskbarCreated = uint32(mid)
+	wc := wndClass{proc: syscall.NewCallback(wndProc), instance: instance, cursor: c, icon: trayHIcon, iconSmall: trayHIcon, background: 16, class: wide(hostWindowClass)}
 	wc.size = uint32(unsafe.Sizeof(wc))
 	atom, _, _ := regClass.Call(uintptr(unsafe.Pointer(&wc)))
 	if atom != 0 {
-		style := uintptr(0)
-		if gazeMode {
-			style = 0x8 // WS_EX_TOPMOST, so review is visible over AAC.
-		}
-		hwnd = create(style, "AACSpellcheckerWindow", title, 0x00cf0000, 0x80000000, 0x80000000, 730, 600, 0, 0)
+		hwnd = create(0, hostWindowClass, title, 0x00cf0000, 0x80000000, 0x80000000, 730, 600, 0, 0)
 	}
 	if hwnd == 0 {
-		msgBox.Call(0, uintptr(unsafe.Pointer(wide("The AAC Spellchecker window could not start."))), uintptr(unsafe.Pointer(wide(title))), 0x10)
-		os.Exit(1)
+		if action == wmOpenSettings {
+			msgBox.Call(0, uintptr(unsafe.Pointer(wide("The AAC Spellchecker window could not start."))), uintptr(unsafe.Pointer(wide(title))), 0x10)
+		}
+		return
 	}
 	go worker(hwnd)
-	if gazeMode {
-		start(task{kind: idGaze, source: source, profile: profile})
-		activateApp()
-	} else {
-		hot, _, _ := registerHotkey.Call(hwnd, 1, 0x4003, 0x77)
-		hotkeyOK = hot != 0
+	addTray()
+	hot, _, _ := registerHotkey.Call(hwnd, 1, 0x4003, 0x77)
+	hotkeyOK = hot != 0
+	switch action {
+	case wmStartAuto:
+		startAutomatic(idAuto, source)
+	case wmStartUndo:
+		startAutomatic(idAutoUndo, source)
+	default:
 		show.Call(hwnd, 5)
 		update.Call(hwnd)
 	}
@@ -432,25 +501,8 @@ func makeFont(h, weight int) uintptr {
 }
 func initControls(h uintptr) {
 	font, larger = makeFont(18, 400), makeFont(25, 650)
-	if gazeMode {
-		widget(h, idHeader, "STATIC", "Review your spelling", 0, 0, larger)
-		widget(h, idStatus, "STATIC", "Checking your draft…", 0, 0, font)
-		widget(h, idOriginal, "STATIC", "Original draft", 0, 0, font)
-		widget(h, idPreview, "STATIC", "Suggested correction", 0, 0, font)
-		widget(h, idInput, "EDIT", "", 0x211044, 0x200, font)
-		widget(h, idOutput, "EDIT", "", 0x211044, 0x200, font)
-		widget(h, idApply, "BUTTON", "Use correction", 0x10000, 0, larger)
-		widget(h, idKeep, "BUTTON", "Keep original", 0x10000, 0, larger)
-		widget(h, idGazeFallback, "BUTTON", "Use Windows spelling", 0x10000, 0, larger)
-		widget(h, idCloudSend, "BUTTON", "Send draft", 0x10000, 0, larger)
-		for _, id := range []int{idInput, idOutput} {
-			send.Call(controls[id], 0xC5, maxDraft, 0)
-		}
-		syncControls()
-		return
-	}
 	widget(h, idHeader, "STATIC", title, 0, 0, larger)
-	widget(h, idHelp, "STATIC", "For gaze-only use, link the AAC Message Window once, then add a Spell Check button to the AAC keyboard page.", 0, 0, font)
+	widget(h, idHelp, "STATIC", "The TD Snap Spell Check button edits your linked draft in one step. Close this window to leave the app in the tray.", 0, 0, font)
 	widget(h, idOriginal, "STATIC", "Original draft", 0, 0, font)
 	widget(h, idEngineLabel, "STATIC", "&Spelling engine", 0, 0, font)
 	widget(h, idEngine, "COMBOBOX", "", 0x210003, 0, font) // tab stop, scroll, dropdown list
@@ -480,7 +532,7 @@ func initControls(h uintptr) {
 		send.Call(controls[id], 0xC5, maxDraft, 0)
 	}
 	if p, cloud := providerFor(profile.Engine); cloud {
-		status(p.name + " is a cloud engine. Drafts are sent only when you confirm.")
+		status(p.name + " is selected. Using Spell Check sends the current draft to this provider.")
 	}
 	syncControls()
 }
@@ -499,23 +551,6 @@ func layout(h uintptr) {
 		for i, id := range ids {
 			box(id, 16+i*(width+8), y, width, 42)
 		}
-	}
-	if gazeMode {
-		box(idHeader, 20, 18, w-40, 34)
-		box(idStatus, 20, 64, w-40, 64)
-		part := (v - 295) / 2
-		box(idOriginal, 20, 137, w-40, 24)
-		box(idInput, 20, 161, w-40, part)
-		box(idPreview, 20, 172+part, w-40, 24)
-		box(idOutput, 20, 196+part, w-40, part)
-		b := (w - 56) / 2
-		box(idKeep, 20, v-86, b, 66)
-		box(idApply, w-20-b, v-86, b, 66)
-		// Keep fallback and Apply at different coordinates. A lingering
-		// dwell over a fallback button must not approve its new result.
-		box(idGazeFallback, w-20-b, 196+part, b, 66)
-		box(idCloudSend, 20, 196+part, b, 66)
-		return
 	}
 	box(idHeader, 16, 12, w-32, 31)
 	box(idHelp, 16, 48, w-32, 43)
@@ -541,16 +576,36 @@ func layout(h uintptr) {
 	box(idStatus, 16, v-50, w-32, 48)
 }
 func wndProc(h uintptr, m uint32, w, l uintptr) uintptr {
+	if taskbarCreated != 0 && m == taskbarCreated {
+		addTray()
+		return 0
+	}
 	switch m {
+	case wmOpenSettings:
+		activateApp()
+		return 0
+	case wmStartAuto, wmStartUndo:
+		if m == wmStartAuto {
+			startAutomatic(idAuto, w)
+		} else if w != 0 && activeRoot() == w {
+			startAutomatic(idAutoUndo, w)
+		}
+		return 0
+	case wmTrayIcon:
+		onTrayEvent(l)
+		return 0
 	case 1:
 		initControls(h)
 		return 0
 	case 0x0010: // WM_CLOSE
-		if gazeMode {
-			closeReview(h)
-			return 0
+		if trayAdded || addTray() {
+			show.Call(h, 0)
+		} else {
+			requestExit()
 		}
+		return 0
 	case 2:
+		removeTray()
 		stopModels()
 		if hotkeyOK {
 			unregisterHotkey.Call(h, 1)
@@ -595,8 +650,11 @@ func wndProc(h uintptr, m uint32, w, l uintptr) uintptr {
 	case wmModelProgress:
 		select {
 		case message := <-statusUpdates:
-			if busy && !closingReview {
+			if busy {
 				status(message)
+				if autoInProgress {
+					trayUpdate("AAC Spellchecker — " + message)
+				}
 			}
 		default:
 		}
@@ -610,18 +668,6 @@ func wndProc(h uintptr, m uint32, w, l uintptr) uintptr {
 		return 0
 	case 0x0111:
 		id, n := int(w&0xffff), uint32(w>>16)
-		if gazeMode && id == idKeep && l != 0 && n == 0 {
-			closeReview(h)
-			return 0
-		}
-		if gazeMode && id == idGazeFallback && l != 0 && n == 0 && !busy && (gazeModelFailed || gazeCloudPending) {
-			start(task{kind: idGazeFallback})
-			return 0
-		}
-		if gazeMode && id == idCloudSend && l != 0 && n == 0 && !busy && gazeCloudPending {
-			start(task{kind: idCloudSend, approved: true})
-			return 0
-		}
 		if id == idEngine && n == 1 && !busy && !holding { // CBN_SELCHANGE
 			next := profile
 			next.Engine = selectedEngine().id
@@ -637,7 +683,7 @@ func wndProc(h uintptr, m uint32, w, l uintptr) uintptr {
 			setBox(idCloudKey, "")
 			previewValid = false
 			if p, cloud := providerFor(next.Engine); cloud {
-				status(p.name + " requires an API key and internet. Your draft is sent only when you confirm.")
+				status(p.name + " needs a key and internet. Spell Check sends the current draft to this provider.")
 			} else if next.Engine == "windows" {
 				status("Windows Spell Checking selected. No download needed.")
 			} else {
@@ -686,24 +732,39 @@ func textBox(id int) string {
 }
 func activateApp() { show.Call(hwnd, 9); activate.Call(hwnd) }
 func selectedEngine() engine {
-	if gazeMode {
-		return getEngine(profile.Engine)
-	}
 	value, _, _ := send.Call(controls[idEngine], 0x147, 0, 0) // CB_GETCURSEL
 	return engineAt(int(value))
 }
+
+var autoInProgress bool
+
+func startAutomatic(kind int, source uintptr) {
+	if busy || holding || exiting {
+		trayUpdate("AAC Spellchecker — already working")
+		return
+	}
+	if kind == idAuto && (source == 0 || source == hwnd || source != activeRoot()) {
+		message := "The AAC window is no longer active. No draft was sent or changed."
+		status(message)
+		trayUpdate("AAC Spellchecker — " + message)
+		return
+	}
+	if kind == idAutoUndo && !autoUndoReady {
+		message := "There is no automatic correction to undo."
+		status(message)
+		trayUpdate("AAC Spellchecker — " + message)
+		return
+	}
+	start(task{kind: kind, source: source, profile: profile})
+}
+
 func start(t task) {
 	t.engine = selectedEngine()
-	if t.kind == idGazeFallback {
-		t.engine = engines[0]
-	}
-	if gazeMode {
-		gazeEngineID = t.engine.id
-		gazeModelFailed = false
-		gazeCloudPending = false
+	autoInProgress = t.kind == idAuto || t.kind == idAutoUndo
+	if autoInProgress {
+		t.engine = getEngine(t.profile.Engine)
 	}
 	busy = true
-	applyingReview = t.kind == idApply
 	if t.approved {
 		setBox(idOutput, "")
 		previewValid = false
@@ -713,17 +774,34 @@ func start(t task) {
 	} else {
 		status("Working…")
 	}
+	if autoInProgress {
+		trayUpdate("AAC Spellchecker — checking draft")
+	}
 	syncControls()
 	jobs <- t
 }
 func finish(r result) {
 	busy = false
-	applyingReview = false
-	if gazeMode && (closingReview || r.kind == idApply && r.err == nil) {
-		returnToAAC(hwnd, true)
+	if exiting {
+		destroyWindow.Call(hwnd)
+		return
+	}
+	autoInProgress = false
+	autoUndoReady = r.autoUndo
+	if r.kind == idAuto || r.kind == idAutoUndo {
+		message := r.status
+		if r.err != nil {
+			message = r.err.Error()
+		}
+		status(message)
+		trayUpdate("AAC Spellchecker — " + message)
+		syncControls()
 		return
 	}
 	if r.kind == idLink {
+		attached, undo = r.attached, r.undo
+		setBox(idOutput, "")
+		previewValid = false
 		if r.err == nil {
 			r.err = saveProfile(r.profile)
 			if r.err == nil {
@@ -740,54 +818,29 @@ func finish(r result) {
 		return
 	}
 	attached, undo = r.attached, r.undo
-	if r.kind == idGaze || r.kind == idGazeFallback || r.kind == idCloudSend {
-		gazeModelFailed = r.err != nil && r.attached && gazeEngineID != "windows"
-		gazeCloudPending = r.cloudPending
-	}
-	if r.kind == idCapture || r.kind == idGaze || r.kind == idPaste || r.kind == idClear {
+	if r.kind == idCapture || r.kind == idPaste || r.kind == idClear {
 		setBox(idInput, r.original)
 		setBox(idOutput, r.preview)
 		previewValid = r.checked
-		if r.kind == idCapture || r.kind == idGaze {
+		if r.kind == idCapture {
 			activateApp()
 		}
 	}
-	if r.err == nil && (r.kind == idCheck || r.kind == idApply || r.kind == idUndo || r.kind == idGazeFallback || r.kind == idCloudSend) {
-		if r.kind != idCheck && r.kind != idGazeFallback && r.kind != idCloudSend {
+	if r.err == nil && (r.kind == idCheck || r.kind == idApply || r.kind == idUndo) {
+		if r.kind != idCheck {
 			setBox(idInput, r.original)
 		}
 		setBox(idOutput, r.preview)
 		previewValid = r.checked
 	}
 	if r.err != nil {
-		if gazeMode && r.kind == idApply {
-			previewValid = false
-		}
 		status(r.err.Error())
 	} else {
-		message := r.status
-		if r.cloudPending {
-			p, _ := providerFor(selectedEngine().id)
-			if gazeMode {
-				message = "Send this draft to " + p.name + " for proofreading, or use Windows spelling to keep it on this device."
-				setBox(idCloudSend, "Send to "+p.name)
-			} else {
-				message = "Draft captured. Choose Check spelling to review before sending it to " + p.name + "."
-			}
-		} else if r.kind == idGaze || r.kind == idGazeFallback || r.kind == idCloudSend {
-			message = "Review the suggestion. Use correction writes it back to your AAC draft."
-			if textBox(idInput) == textBox(idOutput) {
-				message = "No spelling changes suggested. Choose Keep original to return to AAC."
-			}
-		}
-		status(message)
+		status(r.status)
 	}
 	syncControls()
 	if r.kind == idClear || r.kind == idPaste {
 		setFocus.Call(controls[idInput])
-	}
-	if r.kind == idGaze || r.kind == idGazeFallback || r.kind == idCloudSend {
-		setFocus.Call(controls[idKeep])
 	}
 	if r.kind == idCapture || r.kind == idCheck {
 		setFocus.Call(controls[idOutput])
@@ -804,35 +857,6 @@ func syncControls() {
 		}
 		enable.Call(controls[id], v)
 	}
-	if gazeMode {
-		on(idKeep, !closingReview && (!busy || !applyingReview))
-		apply, fallback := (gazeReview{
-			busy: !idle, attached: attached, valid: previewValid, modelFailed: gazeModelFailed,
-			draft: draft, proposal: corrected, engineID: gazeEngineID,
-		}).actions()
-		sendCloud := idle && attached && gazeCloudPending && strings.TrimSpace(draft) != ""
-		fallback = fallback || sendCloud
-		on(idApply, apply)
-		on(idGazeFallback, fallback)
-		on(idCloudSend, sendCloud)
-		show.Call(controls[idCloudSend], windowVisibility(sendCloud))
-		if fallback {
-			show.Call(controls[idOutput], 0)
-			show.Call(controls[idPreview], 0)
-			show.Call(controls[idGazeFallback], 8) // SW_SHOWNA
-		} else {
-			show.Call(controls[idGazeFallback], 0)
-			show.Call(controls[idOutput], 8)
-			show.Call(controls[idPreview], 8)
-		}
-		send.Call(controls[idInput], 0xCF, 1, 0)
-		var readOnly uintptr
-		if !idle || !previewValid {
-			readOnly = 1
-		}
-		send.Call(controls[idOutput], 0xCF, readOnly, 0)
-		return
-	}
 	for _, id := range []int{idLink, idCapture, idPaste, idClear} {
 		on(id, idle)
 	}
@@ -844,7 +868,7 @@ func syncControls() {
 	}
 	on(idCheck, idle && strings.TrimSpace(draft) != "")
 	on(idApply, idle && attached && have && corrected != draft)
-	on(idUndo, idle && attached && undo)
+	on(idUndo, idle && ((attached && undo) || autoUndoReady))
 	on(idCopy, idle && have)
 	readonly := func(id int, b bool) {
 		var v uintptr
@@ -894,18 +918,8 @@ func action(h uintptr, id int) {
 		}
 		start(task{kind: idPaste, s: s})
 	case idCheck:
-		draft := textBox(idInput)
-		p, cloud := providerFor(selectedEngine().id)
-		if cloud {
-			holding = true
-			answer, _, _ := msgBox.Call(h, uintptr(unsafe.Pointer(wide("Send this draft to "+p.name+" over the internet for proofreading? Choose No to keep it on this device."))), uintptr(unsafe.Pointer(wide("Send draft to "+p.name+"?"))), 0x124) // Yes/No, default No
-			holding = false
-			if answer != 6 {
-				status("No draft was sent.")
-				return
-			}
-		}
-		start(task{kind: idCheck, s: draft, approved: cloud})
+		_, cloud := providerFor(selectedEngine().id)
+		start(task{kind: idCheck, s: textBox(idInput), approved: cloud})
 	case idCloudSave, idCloudRemove:
 		p, cloud := providerFor(selectedEngine().id)
 		if !cloud {
@@ -926,12 +940,13 @@ func action(h uintptr, id int) {
 		}
 		setBox(idCloudKey, "")
 	case idApply:
-		if gazeMode && (!attached || !previewValid) {
-			return
-		}
 		start(task{kind: idApply, s: textBox(idOutput)})
 	case idUndo:
-		start(task{kind: idUndo})
+		if attached && undo {
+			start(task{kind: idUndo})
+		} else {
+			startAutomatic(idAutoUndo, 0)
+		}
 	case idCopy:
 		if err := saveClipboard(h, textBox(idOutput)); err != nil {
 			status(err.Error())
@@ -943,28 +958,14 @@ func action(h uintptr, id int) {
 	}
 }
 
-func closeReview(h uintptr) {
+func requestExit() {
 	if busy {
-		if applyingReview {
-			return
-		}
-		closingReview = true
+		exiting = true
 		stopModels()
-		returnToAAC(h, false)
+		show.Call(hwnd, 0)
 		return
 	}
-	returnToAAC(h, true)
-}
-
-func returnToAAC(h uintptr, close bool) {
-	active, _, _ := foregroundWindow.Call()
-	if active == h && gazeOrigin != 0 {
-		activate.Call(gazeOrigin)
-	}
-	show.Call(h, 0)
-	if close {
-		destroyWindow.Call(h)
-	}
+	destroyWindow.Call(hwnd)
 }
 
 func loadClipboard(h uintptr) (string, error) {

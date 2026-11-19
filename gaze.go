@@ -25,16 +25,3 @@ func getEngine(id string) engine {
 	}
 	return engines[0]
 }
-
-type gazeReview struct {
-	busy, attached, valid, modelFailed bool
-	draft, proposal, engineID          string
-}
-
-func (s gazeReview) actions() (apply, fallback bool) {
-	if s.busy || !s.attached || strings.TrimSpace(s.draft) == "" {
-		return false, false
-	}
-	return s.valid && strings.TrimSpace(s.proposal) != "" && s.proposal != s.draft,
-		s.modelFailed && getEngine(s.engineID).id != "windows"
-}

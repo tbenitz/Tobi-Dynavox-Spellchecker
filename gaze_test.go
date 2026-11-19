@@ -35,25 +35,3 @@ func TestStoredEngineDefaultsToWindows(t *testing.T) {
 		}
 	}
 }
-
-func TestGazeReviewActions(t *testing.T) {
-	cases := []struct {
-		name            string
-		state           gazeReview
-		apply, fallback bool
-	}{
-		{"loading", gazeReview{busy: true, attached: true, draft: "wtaer", engineID: "tiny"}, false, false},
-		{"correction ready", gazeReview{attached: true, valid: true, draft: "wtaer", proposal: "water", engineID: "tiny"}, true, false},
-		{"identical", gazeReview{attached: true, valid: true, draft: "water", proposal: "water", engineID: "tiny"}, false, false},
-		{"optional model failed", gazeReview{attached: true, draft: "wtaer", engineID: "tiny", modelFailed: true}, false, true},
-		{"field inaccessible", gazeReview{draft: "wtaer", engineID: "tiny", modelFailed: true}, false, false},
-		{"default failed", gazeReview{attached: true, draft: "wtaer", engineID: "windows", modelFailed: true}, false, false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if apply, fallback := tc.state.actions(); apply != tc.apply || fallback != tc.fallback {
-				t.Fatalf("got apply=%v fallback=%v, want %v %v", apply, fallback, tc.apply, tc.fallback)
-			}
-		})
-	}
-}

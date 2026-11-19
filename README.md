@@ -1,6 +1,6 @@
 # Tobi Dynavox Spellchecker
 
-A portable Windows 10/11 x64 spelling review tool for people composing their own AAC messages. It defaults to the installed Windows English (US) dictionary, which needs no account, model download, or internet connection. Six optional models run on your PC after a one-time download. It does not record drafts. Windows and the six local models check drafts without sending them anywhere. Two optional cloud engines send only the draft you explicitly approve. This is an independent tool, not a Tobii Dynavox product.
+A portable Windows 10/11 x64 spelling review tool for people composing their own AAC messages. It defaults to the installed Windows English (US) dictionary, which needs no account, model download, or internet connection. Six optional models run on your PC after a one-time download. It does not record drafts. Windows and the six local models check drafts without sending them anywhere. With a configured cloud engine selected, pressing Spell Check sends the current draft to that provider. There is no background capture or sending. This is an independent tool, not a Tobii Dynavox product.
 
 ## Spelling engines
 
@@ -25,41 +25,41 @@ Select **DeepSeek (cloud)** or **Grok (cloud)** in the desktop spelling-engine m
 - **DeepSeek** uses [DeepSeek Flash](https://api-docs.deepseek.com/api/create-chat-completion/) with thinking turned off.
 - **Grok** uses [Grok 4.20 Non-Reasoning](https://docs.x.ai/developers/models/grok-4.20-non-reasoning) through the Responses API and requests `store: false`.
 
-In the desktop app, **Check spelling** asks before sending. From TD Snap, **Spell Check** shows the original draft and large **Send to DeepSeek** or **Send to Grok**, **Use Windows spelling**, and **Keep original** buttons. Choose **Use Windows spelling** to check the same draft without sending it anywhere. A cloud result is a preview you can accept or discard. If it is incomplete, invalid, or changes a number, the app rejects it. The spellchecker sends no previous drafts. Cloud checks require internet and are subject to the provider’s data policies.
+Once an engine is selected and its key is saved, pressing **Spell Check** in TD Snap checks the current draft using that engine. There is no separate cloud confirmation. The app does not watch the draft while you type or send previous drafts. Select **Windows Spell Checking** in the tray settings for offline checks. Cloud checks require internet and are subject to the provider’s data policies.
 
 ## Download
 
-v0.3.0 is a device-testing preview. TD Snap write-back and gaze selection have not been verified on a physical device.
+v0.4.0 is a device-testing preview. TD Snap write-back and gaze selection have not been verified on a physical device.
 
-- [Download the portable Windows EXE](https://github.com/tbenitz/Tobi-Dynavox-Spellchecker/releases/download/v0.3.0/Tobi-Dynavox-Spellchecker.exe)
-- [Download the source ZIP](https://github.com/tbenitz/Tobi-Dynavox-Spellchecker/releases/download/v0.3.0/Tobi-Dynavox-Spellchecker-source.zip)
+- [Download the portable Windows EXE](https://github.com/tbenitz/Tobi-Dynavox-Spellchecker/releases/download/v0.4.0/Tobi-Dynavox-Spellchecker.exe)
+- [Download the source ZIP](https://github.com/tbenitz/Tobi-Dynavox-Spellchecker/releases/download/v0.4.0/Tobi-Dynavox-Spellchecker-source.zip)
 
 ## TD Snap setup for eye gaze
 
-**Daily use:** compose in TD Snap, dwell on **Spell Check** on the AAC keyboard page, then choose **Use correction** or **Keep original** in the large-button review. **Use correction** updates the same Message Window and returns to AAC. Speak when you're ready using TD Snap. There is no manual copy/paste, keyboard shortcut, or pointer countdown in this workflow. If you select a cloud engine, the draft stays on the device until you choose **Send to DeepSeek** or **Send to Grok**. You can choose **Use Windows spelling** instead, including after a model error.
+**Daily use:** compose in TD Snap, then dwell on **Spell Check** once. The spellchecker checks and replaces the linked draft in place without opening a review window, changing focus, or requiring another click. It never presses **Speak**. The spellchecker checks that the draft has not changed and rejects invalid output, changed numbers, and obvious rewrites. The latest status is available on the tray icon and in Settings without a popup.
 
 **One-time setup** (a caregiver or setup partner can do this):
 
-1. Save the EXE permanently in a folder on the Windows device. Launch it normally and leave **Windows Spell Checking** selected, or choose a different engine. Your explicit selection is remembered. For a local model, make one check online to cache it. For a cloud engine, save its API key.
-2. In TD Snap, open the keyboard page, enter a plain-text sample draft and make the Message Window visible. In Spellchecker choose **Link AAC field**, dismiss the instructions, and place the pointer on the TD Snap Message Window until setup captures it. Wait for **AAC field linked**. This checks for a uniquely identified writable Windows accessibility field.
-3. In TD Snap Edit mode, add a regular button named **Spell Check** to the keyboard or message page. Set its action to **Launch Application**, choose the EXE, and in **Advanced → Command Line Arguments** enter `--check`. Put it somewhere that is easy to dwell on. The setup utility can be closed after linking.
-4. Leave Edit mode. Try an unsent draft such as “I wnat a glass of water” using **Spell Check**, then **Use correction**. Check that the message changes in TD Snap and that you can still select TD Snap's normal Speak button by gaze.
+1. Save the EXE in a permanent folder on the Windows device and open it normally. Leave **Windows Spell Checking** selected, or choose another engine. For an optional cloud engine, enter your key and choose **Save key**.
+2. In TD Snap, open the keyboard page and enter a plain-text sample. In Spellchecker choose **Link AAC field**, dismiss the instructions, and leave the pointer on the TD Snap Message Window until it is linked.
+3. In TD Snap Edit mode, add a **Spell Check** button. Set its action to **Launch Application**, select the EXE, and enter `--check` in **Advanced → Command Line Arguments**. If you already set this up in v0.3.0, quit the old spellchecker and replace the EXE at the same path. The button and link can stay as they are.
+4. In normal TD Snap mode, test with an unsent draft such as “I wnat a glass of water.” Choose **Spell Check** once, then check that the corrected draft appears in the same Message Window. Speak only when you're ready.
 
-The review uses regular Windows buttons. The device needs a gaze mode that can click Windows apps outside TD Snap, not only TD Snap's built-in page buttons. Tobii Dynavox documents TD Control and launch actions in the [TD Snap manual](https://download.mytobiidynavox.com/Snap/documents/TD_Snap_UsersManual_en-US.pdf). Windows desktop access and launching an EXE may be unavailable in kiosk or restricted configurations.
+**Settings and Undo:** Click the **AAC Spellchecker** icon next to the Windows clock to open Settings. It may be under the hidden-icons arrow. Closing the window leaves the spellchecker in the tray. The tray menu has **Undo last automatic correction** and **Exit**. For gaze-only Undo inside TD Snap, an optional second **Undo spelling** button can launch the same EXE with `--undo`. Undo restores the last draft only if it still matches the corrected text.
 
-**Compatibility:** the eye-gaze route requires that TD Snap leaves its window active when starting the EXE and exposes a visibly available, uniquely identifiable, writable plain-text Message Window. If linking fails or the app blocks write-back, the tool reports that limitation. It will not try to simulate clicks or require you to paste as part of the gaze flow. Relink after an AAC update if the target identity changes. Don't use this plain-text route for drafts containing symbols or formatting that must be preserved.
+**Compatibility:** The TD Snap window must remain active during the check and its Message Window must expose a uniquely identifiable, writable plain-text field. TD Snap must also be allowed to launch the EXE. Some kiosk configurations block application launches. Direct editing has not yet been verified on Tobii Dynavox hardware. [TD Snap manual](https://download.mytobiidynavox.com/Snap/documents/TD_Snap_UsersManual_en-US.pdf)
 
 ### Other ways to use the tool
 
-The regular EXE still has the optional **Capture field**, **Ctrl+Alt+F8**, and clipboard controls for people who want a general-purpose desktop spellchecker. **Undo AAC fix** is available in the regular window for direct replacements made from that window. These are separate from the gaze workflow.
+The regular EXE still has the optional **Capture field**, **Ctrl+Alt+F8**, and clipboard controls for people who want a general-purpose desktop spellchecker. **Undo AAC fix** in the regular window supports the last manual edit or automatic edit when available. These are separate from the gaze workflow.
 
 The spellchecker never invokes Speak or sends a Speak shortcut. If AAC is configured to speak inserted text, the AAC app's own settings still apply.
 
 ## Requirements and test status
 
 - Windows 10/11 x64, with the English (US) spelling dictionary installed. If the spelling service reports that the dictionary is missing, add English (United States) in Windows Language settings.
-- The Windows engine checks spelling only. The cloud engines can also fix obvious capitalization and punctuation, but may still get words wrong. The app requires explicit review and never applies a model result automatically.
-- Direct write-back, the TD Snap launch action and selection by eye gaze have not been verified on a physical Tobii Dynavox device. Test with a short unsent draft first, such as “I wnat a glass of water.”
+- The Windows engine checks spelling only. The cloud engines can also fix obvious capitalization and punctuation, but may still get words wrong. The TD Snap button applies the selected engine’s result automatically when the draft is still current. Select Windows spelling if you prefer dictionary-only changes.
+- The linked-field automatic edit and Undo are tested with a Windows test app. The TD Snap launch action and direct write-back have not been verified on a physical Tobii Dynavox device. Test with a short unsent draft first, such as “I wnat a glass of water.”
 - The executable is unsigned. Windows may display its usual warning for a new unsigned app. It does not need administrator privileges.
 
 ## Build from source
@@ -71,4 +71,4 @@ go test ./...
 go build -buildvcs=false -trimpath -ldflags "-s -w -H windowsgui" -o Tobi-Dynavox-Spellchecker.exe .
 ```
 
-Portable unit tests cover the engine catalog, model-preview validation, UTF-16 replacement offsets, stale-draft protection, read-back verification and undo, plus simulated DeepSeek and Grok requests. Windows tests verify encrypted, provider-specific key storage. The Windows CI smoke test provisions the runtime and checks one optional model before and after blocking downloads. Windows-only tests also exercise the system dictionary and read, replace and re-read a linked field in a separate Win32 test app. Live device testing is still needed for the TD Snap direct route.
+Portable unit tests cover the engine catalog, model-preview validation, UTF-16 replacement offsets, stale-draft protection, read-back verification and undo, plus simulated DeepSeek and Grok requests. Windows tests verify encrypted, provider-specific key storage, tray API layout, linked-field automatic replacement, and Undo. The Windows CI smoke test provisions the runtime and checks one optional model before and after blocking downloads. Windows-only tests also exercise the system dictionary and read, replace and re-read a linked field in a separate Win32 test app. Live device testing is still needed for the TD Snap direct route.

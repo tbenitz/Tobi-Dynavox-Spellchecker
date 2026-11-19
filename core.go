@@ -15,6 +15,15 @@ type writableField interface {
 	set(string) error
 }
 
+// Unconfirmed writes might already have changed the field. Their callers
+// should keep a guarded undo that only runs if the proposed text is present.
+type unconfirmedWrite struct{ error }
+
+func mayHaveWritten(err error) bool {
+	var attempted unconfirmedWrite
+	return errors.As(err, &attempted)
+}
+
 // Compare at write time, not just when opening the review panel. There is no
 // atomic compare-and-set in UI Automation. Read back to confirm what landed.
 func writeReviewed(f writableField, expected, replacement string) error {
@@ -32,11 +41,11 @@ func writeReviewed(f writableField, expected, replacement string) error {
 		return nil
 	}
 	if err = f.set(replacement); err != nil {
-		return fmt.Errorf("The AAC app did not confirm the write. Check the field before retrying. %w", err)
+		return unconfirmedWrite{fmt.Errorf("The AAC app did not confirm the write. Check the field before retrying. %w", err)}
 	}
 	confirmed, err := f.read()
 	if err != nil || confirmed != replacement {
-		return errors.New("The replacement could not be verified. Check the AAC field before retrying.")
+		return unconfirmedWrite{errors.New("The replacement could not be verified. Check the AAC field before retrying.")}
 	}
 	return nil
 }

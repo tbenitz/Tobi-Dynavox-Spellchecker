@@ -95,6 +95,10 @@ func (p cloudProvider) extract(data []byte) (string, error) {
 
 var draftNumbers = regexp.MustCompile(`[+−±-]?(?:\p{Nd}+(?:[.,]\p{Nd}+)*|\.\p{Nd}+)(?:[eE][+−-]?\p{Nd}+)?%?`)
 
+func sameNumbers(a, b string) bool {
+	return slices.Equal(draftNumbers.FindAllString(a, -1), draftNumbers.FindAllString(b, -1))
+}
+
 func cloudPreview(draft, content string) (string, int, error) {
 	bad := errors.New("The provider did not return a usable spelling preview. Your draft was not changed.")
 	d := json.NewDecoder(strings.NewReader(content))
@@ -114,7 +118,7 @@ func cloudPreview(draft, content string) (string, int, error) {
 	if _, err := d.Token(); err != io.EOF {
 		return "", 0, bad
 	}
-	if !slices.Equal(draftNumbers.FindAllString(draft, -1), draftNumbers.FindAllString(corrected, -1)) {
+	if !sameNumbers(draft, corrected) {
 		return "", 0, errors.New("The provider changed a number. That preview was rejected and your draft was not changed.")
 	}
 	return modelPreview(draft, corrected)

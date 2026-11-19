@@ -21,7 +21,7 @@ func TestLinkedGazeFieldReadWrite(t *testing.T) {
 		runtime.LockOSThread()
 		instance, _, _ = getModule.Call(0)
 		root := create(0, "STATIC", "Test AAC window", 0x00cf0000, 30, 30, 400, 250, 0, 0)
-		field := create(0x200, "EDIT", "I wnat a glass of water.", 0x50010080, 20, 20, 275, 28, root, 4242)
+		field := create(0x200, "EDIT", "I have a speling problem.", 0x50010080, 20, 20, 275, 28, root, 4242)
 		if root == 0 || field == 0 {
 			os.Exit(1)
 		}
@@ -80,12 +80,23 @@ func TestLinkedGazeFieldReadWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer field.el.release()
-	if original != "I wnat a glass of water." {
+	if original != "I have a speling problem." {
 		t.Fatalf("unexpected text in linked field: %q", original)
 	}
-	const corrected = "I want a glass of water."
-	if err := writeReviewed(field, original, corrected); err != nil {
+	const corrected = "I have a spelling problem."
+	sp, err := spellChecker("en-US")
+	if err != nil {
 		t.Fatal(err)
+	}
+	defer sp.release()
+	record := autoRecord{source: window, profile: p, field: field, original: original}
+	var changed bool
+	record.corrected, changed, err = autoCorrect(field, original, func(draft string) (string, error) {
+		proposed, _, err := propose(sp, draft)
+		return proposed, err
+	}, func() error { return record.verify(ui) })
+	if err != nil || !changed || record.corrected != corrected {
+		t.Fatalf("automatic correction got %q, changed=%v, err=%v", record.corrected, changed, err)
 	}
 	if err := writeReviewed(field, original, "stale"); err == nil {
 		t.Fatal("stale preview should not overwrite the field")
@@ -97,5 +108,11 @@ func TestLinkedGazeFieldReadWrite(t *testing.T) {
 	defer again.el.release()
 	if got != corrected {
 		t.Fatalf("write-back verification returned %q", got)
+	}
+	if err := writeReviewed(field, record.corrected, record.original); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := again.read(); err != nil || got != original {
+		t.Fatalf("undo returned %q / %v", got, err)
 	}
 }
