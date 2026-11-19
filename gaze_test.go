@@ -3,22 +3,22 @@ package main
 import "testing"
 
 func TestBindingMatchesOnlySavedControl(t *testing.T) {
-	key := fieldKey{`C:\AAC\Snap.exe`, "MessageWindow", "TextBox"}
-	if !key.matches(fieldKey{`c:\aac\snap.EXE`, "MessageWindow", "TextBox"}) {
+	key := fieldKey{Executable: `C:\AAC\Snap.exe`, ID: "MessageWindow", Class: "TextBox"}
+	if !key.matches(fieldKey{Executable: `c:\aac\snap.EXE`, ID: "MessageWindow", Class: "TextBox"}) {
 		t.Fatal("same field must survive process restarts and path case")
 	}
 	for _, other := range []fieldKey{
-		{`C:\Elsewhere\Snap.exe`, "MessageWindow", "TextBox"},
-		{key.Executable, "Search", "TextBox"},
-		{key.Executable, key.ID, "SearchBox"},
-		{key.Executable, "", "TextBox"},
+		{Executable: `C:\Elsewhere\Snap.exe`, ID: "MessageWindow", Class: "TextBox"},
+		{Executable: key.Executable, ID: "Search", Class: "TextBox"},
+		{Executable: key.Executable, ID: key.ID, Class: "SearchBox"},
+		{Executable: key.Executable, ID: "", Class: "TextBox"},
 		{},
 	} {
 		if key.matches(other) {
 			t.Fatalf("unexpected match to %+v", other)
 		}
 	}
-	if (fieldKey{key.Executable, "", "TextBox"}).matches(fieldKey{key.Executable, "", "TextBox"}) {
+	if (fieldKey{Executable: key.Executable, ID: "", Class: "TextBox"}).matches(fieldKey{Executable: key.Executable, ID: "", Class: "TextBox"}) {
 		t.Fatal("unnamed field must never be selected automatically")
 	}
 }

@@ -74,7 +74,7 @@ func TestLinkedGazeFieldReadWrite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := gazeProfile{WindowClass: windowClass(window), Field: fieldKey{exe, "4242", "Edit"}}
+	p := gazeProfile{WindowClass: windowClass(window), Field: fieldKey{Executable: exe, ID: "4242", Class: "Edit"}}
 	field, original, err := findGazeField(ui, window, p)
 	if err != nil {
 		t.Fatal(err)

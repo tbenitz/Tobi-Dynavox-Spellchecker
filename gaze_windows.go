@@ -5,11 +5,14 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"syscall"
 	"unsafe"
 )
 
 var (
+	enumWindows      = user.NewProc("EnumWindows")
 	foregroundWindow = user.NewProc("GetForegroundWindow")
 	windowFromPoint  = user.NewProc("WindowFromPoint")
 	windowAncestor   = user.NewProc("GetAncestor")
@@ -26,6 +29,7 @@ var (
 
 type gazeProfile struct {
 	WindowClass string
+	WindowImage string
 	Field       fieldKey
 	Engine      string
 }
@@ -104,7 +108,20 @@ func elementString(el *com, slot int) string {
 
 func elementImage(el *com) string {
 	var pid uint32
-	if !ok(el.invoke(20, uintptr(unsafe.Pointer(&pid)))) || pid == 0 || pid == uint32(os.Getpid()) {
+	if !ok(el.invoke(20, uintptr(unsafe.Pointer(&pid)))) {
+		return ""
+	}
+	return imageForPID(pid)
+}
+
+func imageForWindow(w uintptr) string {
+	var pid uint32
+	windowPID.Call(w, uintptr(unsafe.Pointer(&pid)))
+	return imageForPID(pid)
+}
+
+func imageForPID(pid uint32) string {
+	if pid == 0 || pid == uint32(os.Getpid()) {
 		return ""
 	}
 	h, _, _ := openProcess.Call(0x1000, 0, uintptr(pid))
@@ -131,15 +148,26 @@ func bindGazeField(ui *com, at point, p gazeProfile) (gazeProfile, error) {
 	if w == 0 {
 		return p, errors.New("No AAC window was found under the pointer.")
 	}
-	f, _, err := getField(ui, &at)
+	f, text, err := getField(ui, &at)
 	if err != nil {
 		return p, errors.New("That field does not expose writable plain text to Windows. No gaze shortcut was linked.")
 	}
 	defer f.el.release()
-	next := gazeProfile{WindowClass: windowClass(w), Engine: p.Engine,
-		Field: fieldKey{elementImage(f.el), elementString(f.el, 29), elementString(f.el, 30)}}
+	next := gazeProfile{WindowClass: windowClass(w), WindowImage: imageForWindow(w), Engine: p.Engine,
+		Field: fieldKey{Executable: elementImage(f.el), ID: elementString(f.el, 29), Class: elementString(f.el, 30)}}
+	if next.Field.ID == "" {
+		if strings.TrimSpace(text) != "" {
+			return p, errors.New("This field has no accessibility ID. Clear the draft and link the empty Message Window once.")
+		}
+		name := strings.TrimSpace(elementString(f.el, 23))
+		// A provider may expose its value as its name. Only accept an
+		// accessible label when the field is empty.
+		if name != "" && len(name) <= 100 && !strings.ContainsAny(name, "\r\n") {
+			next.Field.Name = name
+		}
+	}
 	if next.WindowClass == "" || !next.Field.valid() {
-		return p, errors.New("This field has no stable Windows accessibility ID. It cannot be linked safely.")
+		return p, errors.New("This field has no stable Windows accessibility ID or name. It cannot be linked safely.")
 	}
 	found, _, err := findGazeField(ui, w, next)
 	if err != nil {
@@ -153,64 +181,160 @@ func bindGazeField(ui *com, at point, p gazeProfile) (gazeProfile, error) {
 	return next, nil
 }
 
-// Search only the window that was active when the AAC button launched the EXE.
-// No synthetic clicks, clipboard reads, or focus-based writes are used.
-func findGazeField(ui *com, w uintptr, p gazeProfile) (*captured, string, error) {
-	if !p.Field.valid() {
-		return nil, "", errors.New("One-time setup is needed. Open the EXE normally and choose Link AAC field.")
+var (
+	errLinkedWindowAmbiguous = errors.New("More than one AAC field matches the link. No draft was read or changed.")
+	errLinkedFieldMissing    = errors.New("The linked AAC field is not visible or has changed. Relink it if the AAC app was updated.")
+)
+
+func linkedWindowCandidate(w uintptr, p gazeProfile) bool {
+	if w == 0 || p.WindowClass == "" || windowClass(w) != p.WindowClass {
+		return false
 	}
 	iconic, _, _ := isIconic.Call(w)
 	visible, _, _ := isWindowVisible.Call(w)
-	if w == 0 || p.WindowClass == "" || windowClass(w) != p.WindowClass || iconic != 0 || visible == 0 {
-		return nil, "", errors.New("The linked AAC window is not active. Open AAC and try its Spell Check button again.")
+	if iconic != 0 || visible == 0 {
+		return false
+	}
+	return p.WindowImage == "" || strings.EqualFold(imageForWindow(w), p.WindowImage)
+}
+
+// Match the saved field identity without reading anyone's draft yet.
+func matchGazeField(ui *com, w uintptr, p gazeProfile) (*captured, error) {
+	if !p.Field.valid() {
+		return nil, errors.New("One-time setup is needed. Open the EXE normally and choose Link AAC field.")
+	}
+	if !linkedWindowCandidate(w, p) {
+		return nil, errors.New("The linked AAC window is not available. Open its message page.")
 	}
 	var root, cond, items *com
 	if !ok(ui.invoke(6, w, uintptr(unsafe.Pointer(&root)))) || root == nil {
-		return nil, "", errors.New("Windows could not inspect the AAC window.")
+		return nil, errors.New("Windows could not inspect the AAC window.")
 	}
 	defer root.release()
 	if !ok(ui.invoke(21, uintptr(unsafe.Pointer(&cond)))) || cond == nil {
-		return nil, "", errors.New("Windows could not prepare the AAC field search.")
+		return nil, errors.New("Windows could not prepare the AAC field search.")
 	}
 	defer cond.release()
 	if !ok(root.invoke(6, 7, uintptr(unsafe.Pointer(cond)), uintptr(unsafe.Pointer(&items)))) || items == nil {
-		return nil, "", errors.New("Windows could not search the AAC window.")
+		return nil, errors.New("Windows could not search the AAC window.")
 	}
 	defer items.release()
 	var count int32
 	if !ok(items.invoke(3, uintptr(unsafe.Pointer(&count)))) || count < 1 || count > 4000 {
-		return nil, "", errors.New("The linked AAC field could not be identified in this window.")
+		return nil, errors.New("The linked AAC field could not be identified in this window.")
 	}
 	var found *com
 	for i := int32(0); i < count; i++ {
 		var el *com
 		if !ok(items.invoke(4, uintptr(i), uintptr(unsafe.Pointer(&el)))) || el == nil {
 			found.release()
-			return nil, "", errors.New("The AAC window changed during the field search. Try again.")
+			return nil, errors.New("The AAC window changed during the field search. Try again.")
 		}
-		id, class := elementString(el, 29), elementString(el, 30)
-		if id != p.Field.ID || class != p.Field.Class || !eligibleGazeElement(el) ||
-			!p.Field.matches(fieldKey{elementImage(el), id, class}) {
+		candidate := fieldKey{Class: elementString(el, 30)}
+		if candidate.Class == p.Field.Class {
+			if p.Field.ID != "" {
+				candidate.ID = elementString(el, 29)
+			} else {
+				candidate.Name = strings.TrimSpace(elementString(el, 23))
+			}
+			if p.Field.ID != "" && candidate.ID == p.Field.ID || p.Field.ID == "" && candidate.Name == p.Field.Name {
+				candidate.Executable = elementImage(el)
+			}
+		}
+		if !p.Field.matches(candidate) || !eligibleGazeElement(el) {
 			el.release()
 			continue
 		}
 		if found != nil {
 			found.release()
 			el.release()
-			return nil, "", errors.New("More than one AAC field matches the link. No draft was read or changed.")
+			return nil, errLinkedWindowAmbiguous
 		}
 		found = el
 	}
 	if found == nil {
-		return nil, "", errors.New("The linked AAC field is not visible or has changed. Relink it if the AAC app was updated.")
+		return nil, errLinkedFieldMissing
 	}
-	f := &captured{found}
+	return &captured{found}, nil
+}
+
+func findGazeField(ui *com, w uintptr, p gazeProfile) (*captured, string, error) {
+	f, err := matchGazeField(ui, w, p)
+	if err != nil {
+		return nil, "", err
+	}
 	s, err := f.read()
 	if err != nil {
-		found.release()
+		f.el.release()
 		return nil, "", errors.New("The linked AAC field is not writable right now. No text was changed.")
 	}
 	return f, s, nil
+}
+
+var (
+	windowListLock   sync.Mutex
+	listedWindows    []uintptr
+	collectAACWindow = syscall.NewCallback(func(w, _ uintptr) uintptr {
+		listedWindows = append(listedWindows, w)
+		return 1
+	})
+)
+
+func visibleDesktopWindows() ([]uintptr, bool) {
+	windowListLock.Lock()
+	defer windowListLock.Unlock()
+	listedWindows = nil
+	ok, _, _ := enumWindows.Call(collectAACWindow, 0)
+	windows := listedWindows
+	listedWindows = nil
+	return windows, ok != 0
+}
+
+func resolveGazeTarget(ui *com, preferred uintptr, p gazeProfile) (uintptr, *captured, string, error) {
+	if !p.Field.valid() || p.WindowClass == "" {
+		return 0, nil, "", errors.New("No AAC field is linked. Open Settings and use Link AAC field once before using the TD Snap button.")
+	}
+	if linkedWindowCandidate(preferred, p) {
+		f, s, err := findGazeField(ui, preferred, p)
+		if err == nil {
+			return preferred, f, s, nil
+		}
+		// A launcher or auxiliary window may share the root class and
+		// executable. Only an explicit no-match permits a fresh search.
+		if !errors.Is(err, errLinkedFieldMissing) {
+			return 0, nil, "", err
+		}
+	}
+	windows, enumerated := visibleDesktopWindows()
+	var candidates []uintptr
+	for _, w := range windows {
+		if linkedWindowCandidate(w, p) {
+			candidates = append(candidates, w)
+		}
+	}
+	if !enumerated {
+		return 0, nil, "", errors.New("Windows could not list open AAC windows.")
+	}
+	var matches []uintptr
+	for _, w := range candidates {
+		f, err := matchGazeField(ui, w, p)
+		if errors.Is(err, errLinkedWindowAmbiguous) {
+			return 0, nil, "", err
+		}
+		if p.WindowImage != "" && err != nil && !errors.Is(err, errLinkedFieldMissing) {
+			return 0, nil, "", err
+		}
+		if err == nil {
+			f.el.release()
+			matches = append(matches, w)
+		}
+	}
+	w, err := chooseLinkedWindow(preferred, matches)
+	if err != nil {
+		return 0, nil, "", err
+	}
+	f, s, err := findGazeField(ui, w, p)
+	return w, f, s, err
 }
 
 // Keep an in-memory undo of only the last successful automatic edit. The

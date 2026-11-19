@@ -208,40 +208,32 @@ func worker(hwnd uintptr) {
 			if out.err = ensureUI(); out.err != nil {
 				break
 			}
-			if j.source == 0 || activeRoot() != j.source {
-				out.err = fmt.Errorf("The linked AAC window is no longer active. No text was changed.")
-				break
-			}
-			f, original, err := findGazeField(ui, j.source, j.profile)
+			target, f, original, err := resolveGazeTarget(ui, j.source, j.profile)
 			if err != nil {
 				out.err = err
 				break
 			}
-			record := &autoRecord{source: j.source, profile: j.profile, field: f, original: original}
+			record := &autoRecord{source: target, profile: j.profile, field: f, original: original}
 			var changed bool
 			record.corrected, changed, out.err = autoCorrect(f, original, func(draft string) (string, error) {
-				if activeRoot() != j.source || appModelContext.Err() != nil {
-					return "", fmt.Errorf("The linked AAC window is no longer active. No draft was sent or changed.")
+				if appModelContext.Err() != nil {
+					return "", appModelContext.Err()
+				}
+				if err := record.verify(ui); err != nil {
+					return "", err
 				}
 				fresh, err := f.read()
-				if err != nil || fresh != original || activeRoot() != j.source {
+				if err != nil || fresh != original {
 					return "", fmt.Errorf("The draft changed before checking. No draft was sent or changed.")
 				}
-				// Pressing the TD Snap action is the request to check this one
-				// draft using the selected engine and saved credentials.
+				// The AAC button authorizes checking the one linked draft.
 				preview, _, err := check(j.engine, draft, true)
 				return preview, err
 			}, func() error {
-				if appModelContext.Err() != nil || activeRoot() != j.source {
-					return fmt.Errorf("The AAC window changed. The correction was not applied.")
+				if appModelContext.Err() != nil {
+					return appModelContext.Err()
 				}
-				if err := record.verify(ui); err != nil {
-					return err
-				}
-				if activeRoot() != j.source {
-					return fmt.Errorf("The AAC window changed. The correction was not applied.")
-				}
-				return nil
+				return record.verify(ui)
 			})
 			if changed {
 				automaticUndo.release()
@@ -506,7 +498,7 @@ func makeFont(h, weight int) uintptr {
 func initControls(h uintptr) {
 	font, larger = makeFont(18, 400), makeFont(25, 650)
 	widget(h, idHeader, "STATIC", title, 0, 0, larger)
-	widget(h, idHelp, "STATIC", "The TD Snap Spell Check button edits your linked draft in one step. Close this window to leave the app in the tray.", 0, 0, font)
+	widget(h, idHelp, "STATIC", linkHelpText(), 0, 0, font)
 	widget(h, idOriginal, "STATIC", "Original draft", 0, 0, font)
 	widget(h, idEngineLabel, "STATIC", "&Spelling engine", 0, 0, font)
 	widget(h, idEngine, "COMBOBOX", "", 0x210003, 0, font) // tab stop, scroll, dropdown list
@@ -747,12 +739,6 @@ func startAutomatic(kind int, source uintptr) {
 		trayUpdate("AAC Spellchecker — already working")
 		return
 	}
-	if kind == idAuto && (source == 0 || source == hwnd || source != activeRoot()) {
-		message := "The AAC window is no longer active. No draft was sent or changed."
-		status(message)
-		trayUpdate("AAC Spellchecker — " + message)
-		return
-	}
 	if kind == idAutoUndo && !autoUndoReady {
 		message := "There is no automatic correction to undo."
 		status(message)
@@ -810,6 +796,7 @@ func finish(r result) {
 			r.err = saveProfile(r.profile)
 			if r.err == nil {
 				profile = r.profile
+				setBox(idHelp, linkHelpText())
 			}
 		}
 		if r.err != nil {
@@ -849,6 +836,12 @@ func finish(r result) {
 	if r.kind == idCapture || r.kind == idCheck {
 		setFocus.Call(controls[idOutput])
 	}
+}
+func linkHelpText() string {
+	if profile.Field.valid() && profile.WindowClass != "" {
+		return "AAC field linked. Use the TD Snap button to correct it in one step. Capture, Check, and Apply below are only for manual use."
+	}
+	return "Not linked. Choose Link AAC field once. Capture Field is for manual checks and does not save a link for the TD Snap button."
 }
 func syncControls() {
 	idle := !busy && !holding
