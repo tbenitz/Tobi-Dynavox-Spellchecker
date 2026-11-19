@@ -290,20 +290,9 @@ func visibleDesktopWindows() ([]uintptr, bool) {
 	return windows, ok != 0
 }
 
-func resolveGazeTarget(ui *com, preferred uintptr, p gazeProfile) (uintptr, *captured, string, error) {
+func resolveGazeTarget(ui *com, p gazeProfile) (uintptr, *captured, string, error) {
 	if !p.Field.valid() || p.WindowClass == "" {
 		return 0, nil, "", errors.New("No AAC field is linked. Open Settings and use Link AAC field once before using the TD Snap button.")
-	}
-	if linkedWindowCandidate(preferred, p) {
-		f, s, err := findGazeField(ui, preferred, p)
-		if err == nil {
-			return preferred, f, s, nil
-		}
-		// A launcher or auxiliary window may share the root class and
-		// executable. Only an explicit no-match permits a fresh search.
-		if !errors.Is(err, errLinkedFieldMissing) {
-			return 0, nil, "", err
-		}
 	}
 	windows, enumerated := visibleDesktopWindows()
 	var candidates []uintptr
@@ -329,7 +318,7 @@ func resolveGazeTarget(ui *com, preferred uintptr, p gazeProfile) (uintptr, *cap
 			matches = append(matches, w)
 		}
 	}
-	w, err := chooseLinkedWindow(preferred, matches)
+	w, err := chooseLinkedWindow(matches)
 	if err != nil {
 		return 0, nil, "", err
 	}

@@ -2,22 +2,19 @@ package main
 
 import "testing"
 
-func TestChooseLinkedWindowUsesExactLaunchTargetOrUniqueSavedMatch(t *testing.T) {
+func TestChooseLinkedWindowRequiresUniqueSavedMatch(t *testing.T) {
 	for _, tc := range []struct {
-		name      string
-		preferred uintptr
-		matches   []uintptr
-		want      uintptr
-		wantErr   bool
+		name    string
+		matches []uintptr
+		want    uintptr
+		wantErr bool
 	}{
-		{"direct AAC launch", 20, []uintptr{10, 20}, 20, false},
-		{"launcher took focus", 55, []uintptr{20}, 20, false},
-		{"no foreground", 0, []uintptr{20}, 20, false},
-		{"two linked windows and neither launched", 55, []uintptr{10, 20}, 0, true},
-		{"not open", 55, nil, 0, true},
+		{"two linked windows", []uintptr{10, 20}, 0, true},
+		{"one saved link", []uintptr{20}, 20, false},
+		{"not open", nil, 0, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			w, err := chooseLinkedWindow(tc.preferred, tc.matches)
+			w, err := chooseLinkedWindow(tc.matches)
 			if w != tc.want || (err != nil) != tc.wantErr {
 				t.Fatalf("got %d, %v", w, err)
 			}

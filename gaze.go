@@ -30,20 +30,15 @@ func getEngine(id string) engine {
 	return engines[0]
 }
 
-// Prefer the window that directly initiated the command. When a launcher
-// borrowed focus, fall back only to a unique, positively matched link.
-func chooseLinkedWindow(preferred uintptr, matches []uintptr) (uintptr, error) {
-	for _, w := range matches {
-		if w != 0 && w == preferred {
-			return w, nil
-		}
-	}
+// Foreground is not proof of which app launched the command. Require one
+// positively matched link before reading or sending a draft.
+func chooseLinkedWindow(matches []uintptr) (uintptr, error) {
 	switch len(matches) {
 	case 1:
 		return matches[0], nil
 	case 0:
 		return 0, errors.New("No linked AAC field was found. Open its message page or use Link AAC field in Settings.")
 	default:
-		return 0, errors.New("More than one AAC window matches this link. Use Spell Check from the intended window or close the other AAC window.")
+		return 0, errors.New("More than one AAC window matches this link. Close the other AAC window before checking.")
 	}
 }

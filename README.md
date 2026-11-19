@@ -35,10 +35,10 @@ Once an engine is selected and its key is saved, pressing **Spell Check** in TD 
 
 ## Download
 
-v0.6.0 is a device-testing preview. TD Snap write-back and gaze selection have not been verified on a physical device.
+v0.6.1 is a device-testing preview. TD Snap write-back and gaze selection have not been verified on a physical device.
 
-- [Download the portable Windows EXE](https://github.com/tbenitz/Tobi-Dynavox-Spellchecker/releases/download/v0.6.0/Tobi-Dynavox-Spellchecker.exe)
-- [Download the source ZIP](https://github.com/tbenitz/Tobi-Dynavox-Spellchecker/releases/download/v0.6.0/Tobi-Dynavox-Spellchecker-source.zip)
+- [Download the portable Windows EXE](https://github.com/tbenitz/Tobi-Dynavox-Spellchecker/releases/download/v0.6.1/Tobi-Dynavox-Spellchecker.exe)
+- [Download the source ZIP](https://github.com/tbenitz/Tobi-Dynavox-Spellchecker/releases/download/v0.6.1/Tobi-Dynavox-Spellchecker-source.zip)
 
 ## TD Snap setup for eye gaze
 
@@ -53,7 +53,7 @@ v0.6.0 is a device-testing preview. TD Snap write-back and gaze selection have n
 
 **Settings and Undo:** Click the **AAC Spellchecker** icon next to the Windows clock to open Settings. It may be under the hidden-icons arrow. Closing the window leaves the spellchecker in the tray. The tray menu has **Undo last automatic correction** and **Exit**. For gaze-only Undo inside TD Snap, an optional second **Undo spelling** button can launch the same EXE with `--undo`. Undo restores the last draft only if it still matches the corrected text.
 
-**Compatibility:** The spellchecker uses the saved link rather than assuming that the foreground window is TD Snap. It prefers the initiating window when it matches, or finds the single matching open AAC window. It will not choose between ambiguous matches. The Message Window must still be visible, uniquely identifiable, and writable through Windows accessibility. TD Snap must also be allowed to launch the EXE. Some kiosk configurations block application launches. Direct editing has not yet been verified on Tobii Dynavox hardware. [TD Snap manual](https://download.mytobiidynavox.com/Snap/documents/TD_Snap_UsersManual_en-US.pdf)
+**Compatibility:** The spellchecker uses the saved link rather than assuming that the foreground window is TD Snap. It finds the single matching visible AAC window. It will not choose between ambiguous matches. The Message Window must still be visible, uniquely identifiable, and writable through Windows accessibility. TD Snap must also be allowed to launch the EXE. Some kiosk configurations block application launches. Direct editing has not yet been verified on Tobii Dynavox hardware. [TD Snap manual](https://download.mytobiidynavox.com/Snap/documents/TD_Snap_UsersManual_en-US.pdf)
 
 ### Other ways to use the tool
 

@@ -39,7 +39,7 @@ jobs:
       contents: write
     env:
       GH_TOKEN: ${{ github.token }}
-      RELEASE_TAG: v0.6.0
+      RELEASE_TAG: v0.6.1
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -54,6 +54,6 @@ jobs:
           git archive --format=zip --prefix=Tobi-Dynavox-Spellchecker/ HEAD -- . ':!docs/downloads' > dist/Tobi-Dynavox-Spellchecker-source.zip
           (cd dist && sha256sum Tobi-Dynavox-Spellchecker.exe Tobi-Dynavox-Spellchecker-source.zip > SHA256SUMS.txt)
           gh release create "$RELEASE_TAG" --target "$GITHUB_SHA" --prerelease \
-            --title "v0.6.0 — Reliable one-tap AAC trigger" \
-            --notes "The existing --check action locates the saved AAC field even when the launching window briefly takes focus. No manual capture, check or apply steps are needed after linking. Tests cover full cold and warm launch paths. TD Snap write-back and eye-gaze selection have not been tested on physical Tobii Dynavox hardware." \
+            --title "v0.6.1 — Reliable one-tap AAC trigger" \
+            --notes "The existing --check action locates the saved AAC field even when the launching window briefly takes focus. No manual capture, check or apply steps are needed after linking. Tests cover full cold and warm launch paths. When two possible targets exist, the checker does not guess. TD Snap write-back and eye-gaze selection have not been tested on physical Tobii Dynavox hardware." \
             dist/Tobi-Dynavox-Spellchecker.exe dist/Tobi-Dynavox-Spellchecker-source.zip dist/SHA256SUMS.txt

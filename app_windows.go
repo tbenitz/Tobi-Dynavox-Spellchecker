@@ -208,7 +208,7 @@ func worker(hwnd uintptr) {
 			if out.err = ensureUI(); out.err != nil {
 				break
 			}
-			target, f, original, err := resolveGazeTarget(ui, j.source, j.profile)
+			target, f, original, err := resolveGazeTarget(ui, j.profile)
 			if err != nil {
 				out.err = err
 				break
@@ -251,10 +251,6 @@ func worker(hwnd uintptr) {
 		case idAutoUndo:
 			if automaticUndo == nil {
 				out.err = fmt.Errorf("There is no automatic correction to undo.")
-				break
-			}
-			if j.source != 0 && (activeRoot() != j.source || j.source != automaticUndo.source) {
-				out.err = fmt.Errorf("The window does not match the last corrected AAC draft.")
 				break
 			}
 			if out.err = automaticUndo.verify(ui); out.err == nil {
@@ -583,8 +579,8 @@ func wndProc(h uintptr, m uint32, w, l uintptr) uintptr {
 	case wmStartAuto, wmStartUndo:
 		if m == wmStartAuto {
 			startAutomatic(idAuto, w)
-		} else if w != 0 && activeRoot() == w {
-			startAutomatic(idAutoUndo, w)
+		} else {
+			startAutomatic(idAutoUndo, 0)
 		}
 		return 0
 	case wmTrayIcon:
