@@ -26,6 +26,7 @@ var modelSupport embed.FS
 
 const uvURL = "https://github.com/astral-sh/uv/releases/download/0.8.22/uv-x86_64-pc-windows-msvc.zip"
 const uvDigest = "5049375aa2a5162f132b2c1cb992e25d42d47d934cab8c174dbe6f60973dcc12"
+const torchWindowsCPU = "torch @ https://download-r2.pytorch.org/whl/cpu/torch-2.7.1%2Bcpu-cp312-cp312-win_amd64.whl#sha256=0bc887068772233f532b51a3e8c8cfc682ae62bef74bf4e0c53526c8b9e4138f"
 
 func spellModel(ctx context.Context, e engine, draft string, progress func(string)) (string, int, error) {
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Minute)
@@ -196,10 +197,9 @@ func prepareRuntime(ctx context.Context, dir string, progress func(string)) (str
 		}
 	}
 	progress("Installing CPU inference libraries. This is a one-time setup.")
-	if err := run("pip", "install", "--python", python, "--index-url", "https://download.pytorch.org/whl/cpu", "torch==2.7.1"); err != nil {
-		return "", fmt.Errorf("Could not install the CPU inference library. Check internet and disk space (%w).", err)
-	}
-	if err := run("pip", "install", "--python", python, "--index-url", "https://pypi.org/simple", "--index", "https://download.pytorch.org/whl/cpu", "torch==2.7.1+cpu",
+	// Pin the CPU wheel directly so the Torch index can't shadow unrelated
+	// dependencies from PyPI, including tqdm.
+	if err := run("pip", "install", "--python", python, "--index-url", "https://pypi.org/simple", torchWindowsCPU,
 		"transformers==4.53.3", "sentencepiece==0.2.0", "accelerate==1.8.1", "protobuf==6.31.1",
 		"huggingface-hub==0.36.2", "safetensors==0.6.2", "tqdm==4.67.1"); err != nil {
 		return "", fmt.Errorf("Could not install the spelling model libraries. Check internet and disk space (%w).", err)
