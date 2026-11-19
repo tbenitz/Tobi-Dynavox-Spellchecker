@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"runtime"
@@ -77,9 +78,10 @@ type wndClass struct {
 }
 
 const (
-	title     = "AAC Spellchecker"
-	wmDone    = 0x8001
-	idCapture = 101 + iota
+	title           = "AAC Spellchecker"
+	wmDone          = 0x8001
+	wmModelProgress = 0x8002
+	idCapture       = 101 + iota
 	idPaste
 	idCheck
 	idApply
@@ -93,12 +95,15 @@ const (
 	idOriginal
 	idPreview
 	idStatus
+	idEngineLabel
+	idEngine
 )
 
 type task struct {
-	kind int
-	at   *point
-	s    string
+	kind   int
+	at     *point
+	s      string
+	engine engine
 }
 type result struct {
 	kind                      int
@@ -109,6 +114,8 @@ type result struct {
 
 var jobs = make(chan task, 1)
 var results = make(chan result, 1)
+var statusUpdates = make(chan string, 16)
+var appModelContext, stopModels = context.WithCancel(context.Background())
 
 func worker(hwnd uintptr) {
 	runtime.LockOSThread()
@@ -133,7 +140,16 @@ func worker(hwnd uintptr) {
 		undoText = ""
 	}
 	defer detach()
-	check := func(s string) (string, int, error) {
+	check := func(e engine, s string) (string, int, error) {
+		if e.id != "windows" {
+			return spellModel(appModelContext, e, s, func(message string) {
+				select {
+				case statusUpdates <- message:
+					post.Call(hwnd, wmModelProgress, 0, 0)
+				default:
+				}
+			})
+		}
 		if !ready {
 			return "", 0, fmt.Errorf("Windows text services did not start.")
 		}
@@ -173,19 +189,19 @@ func worker(hwnd uintptr) {
 			out.original = capturedText
 			out.preview = capturedText
 			var n int
-			proposed, n, err := check(capturedText)
+			proposed, n, err := check(j.engine, capturedText)
 			if err != nil {
 				out.err = err
 				break
 			}
 			out.preview = proposed
 			out.checked = true
-			out.status = spellStatus(n, true)
+			out.status = checkStatus(j.engine, n, true)
 		case idCheck:
 			var n int
-			out.preview, n, out.err = check(j.s)
+			out.preview, n, out.err = check(j.engine, j.s)
 			out.checked = out.err == nil
-			out.status = spellStatus(n, field != nil)
+			out.status = checkStatus(j.engine, n, field != nil)
 		case idApply:
 			if field == nil {
 				out.err = fmt.Errorf("No AAC field is attached. Use Copy correction and paste in AAC.")
@@ -232,6 +248,19 @@ func worker(hwnd uintptr) {
 	}
 }
 
+func checkStatus(e engine, n int, attached bool) string {
+	if e.id == "windows" {
+		return spellStatus(n, attached)
+	}
+	if n == 0 {
+		return "The selected model left this draft unchanged. You can still edit the preview."
+	}
+	if attached {
+		return "Model preview ready. Review the changes before choosing Apply to AAC."
+	}
+	return "Model preview ready. Review the changes before choosing Copy correction."
+}
+
 func spellStatus(n int, attached bool) string {
 	if n == 0 {
 		return "No spelling replacements suggested. You can still edit the preview."
@@ -255,7 +284,7 @@ func main() {
 	wc.size = uint32(unsafe.Sizeof(wc))
 	atom, _, _ := regClass.Call(uintptr(unsafe.Pointer(&wc)))
 	if atom != 0 {
-		hwnd = create(0, "AACSpellcheckerWindow", title, 0x00cf0000, 0x80000000, 0x80000000, 690, 550, 0, 0)
+		hwnd = create(0, "AACSpellcheckerWindow", title, 0x00cf0000, 0x80000000, 0x80000000, 730, 600, 0, 0)
 	}
 	if hwnd == 0 {
 		msgBox.Call(0, uintptr(unsafe.Pointer(wide("The AAC Spellchecker window could not start."))), uintptr(unsafe.Pointer(wide(title))), 0x10)
@@ -304,6 +333,12 @@ func initControls(h uintptr) {
 	widget(h, idHeader, "STATIC", title, 0, 0, larger)
 	widget(h, idHelp, "STATIC", "Press Ctrl+Alt+F8 while focused on the AAC speech field. Or choose Capture field and point at it within five seconds.", 0, 0, font)
 	widget(h, idOriginal, "STATIC", "Original draft", 0, 0, font)
+	widget(h, idEngineLabel, "STATIC", "&Spelling engine", 0, 0, font)
+	widget(h, idEngine, "COMBOBOX", "", 0x210003, 0, font) // tab stop, scroll, dropdown list
+	for _, e := range engines {
+		send.Call(controls[idEngine], 0x143, 0, uintptr(unsafe.Pointer(wide(e.label)))) // CB_ADDSTRING
+	}
+	send.Call(controls[idEngine], 0x14e, 0, 0) // CB_SETCURSEL: Windows is the default
 	widget(h, idPreview, "STATIC", "Review and edit the correction", 0, 0, font)
 	widget(h, idStatus, "STATIC", "Offline English (US) spelling. This app does not press Speak.", 0, 0, font)
 	for _, b := range []struct {
@@ -340,11 +375,13 @@ func layout(h uintptr) {
 	}
 	box(idHeader, 16, 12, w-32, 31)
 	box(idHelp, 16, 48, w-32, 43)
-	row(97, idCapture, idPaste, idCheck)
-	panel := max(42, (v-318)/2)
-	box(idOriginal, 16, 148, w-32, 23)
-	box(idInput, 16, 173, w-32, panel)
-	py := 179 + panel
+	box(idEngineLabel, 16, 97, 130, 23)
+	box(idEngine, 152, 94, w-168, 270)
+	row(135, idCapture, idPaste, idCheck)
+	panel := max(42, (v-356)/2)
+	box(idOriginal, 16, 186, w-32, 23)
+	box(idInput, 16, 211, w-32, panel)
+	py := 217 + panel
 	box(idPreview, 16, py, w-32, 23)
 	box(idOutput, 16, py+25, w-32, panel)
 	row(v-100, idApply, idUndo, idCopy, idClear)
@@ -356,6 +393,7 @@ func wndProc(h uintptr, m uint32, w, l uintptr) uintptr {
 		initControls(h)
 		return 0
 	case 2:
+		stopModels()
 		if hotkeyOK {
 			unregisterHotkey.Call(h, 1)
 		}
@@ -373,7 +411,7 @@ func wndProc(h uintptr, m uint32, w, l uintptr) uintptr {
 		}
 		return 0
 	case 0x24:
-		min := point{620, 480}
+		min := point{650, 530}
 		// WM_GETMINMAXINFO supplies a native struct of five POINTs.
 		moveMemory.Call(l+3*unsafe.Sizeof(min), uintptr(unsafe.Pointer(&min)), unsafe.Sizeof(min))
 		return 0
@@ -396,6 +434,15 @@ func wndProc(h uintptr, m uint32, w, l uintptr) uintptr {
 			}
 			return 0
 		}
+	case wmModelProgress:
+		select {
+		case message := <-statusUpdates:
+			if busy {
+				status(message)
+			}
+		default:
+		}
+		return 0
 	case wmDone:
 		select {
 		case r := <-results:
@@ -405,6 +452,17 @@ func wndProc(h uintptr, m uint32, w, l uintptr) uintptr {
 		return 0
 	case 0x0111:
 		id, n := int(w&0xffff), uint32(w>>16)
+		if id == idEngine && n == 1 && !busy && !holding { // CBN_SELCHANGE
+			setBox(idOutput, "")
+			previewValid = false
+			if selectedEngine().id == "windows" {
+				status("Windows Spell Checking selected. No download needed.")
+			} else {
+				status("The selected model runs locally. On the first check, the app downloads missing files.")
+			}
+			syncControls()
+			return 0
+		}
 		if n == 0x0300 && (id == idInput || id == idOutput) && !updating && !busy && !holding {
 			if id == idInput && !attached {
 				setBox(idOutput, "")
@@ -443,7 +501,12 @@ func textBox(id int) string {
 	return syscall.UTF16ToString(buf)
 }
 func activateApp() { show.Call(hwnd, 9); activate.Call(hwnd) }
+func selectedEngine() engine {
+	value, _, _ := send.Call(controls[idEngine], 0x147, 0, 0) // CB_GETCURSEL
+	return engineAt(int(value))
+}
 func start(t task) {
+	t.engine = selectedEngine()
 	busy = true
 	status("Working…")
 	syncControls()
@@ -496,6 +559,7 @@ func syncControls() {
 	for _, id := range []int{idCapture, idPaste, idClear} {
 		on(id, idle)
 	}
+	on(idEngine, idle)
 	on(idCheck, idle && strings.TrimSpace(draft) != "")
 	on(idApply, idle && attached && have && corrected != draft)
 	on(idUndo, idle && attached && undo)

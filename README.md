@@ -1,6 +1,22 @@
 # Tobi Dynavox Spellchecker
 
-A portable Windows 10/11 x64 spelling review tool for people composing their own AAC messages. It uses the installed Windows English (US) spelling dictionary and needs no account, AI model, installer, or internet connection to check a draft. It does not record drafts or send them anywhere. This is an independent tool, not a Tobii Dynavox product.
+A portable Windows 10/11 x64 spelling review tool for people composing their own AAC messages. It defaults to the installed Windows English (US) dictionary, which needs no account, model download, or internet connection. Six optional models run on your PC after a one-time download. It does not record drafts or send them anywhere. This is an independent tool, not a Tobii Dynavox product.
+
+## Spelling engines
+
+Choose an engine in the app, then click **Check spelling** or capture a field as usual. Windows Spell Checking is selected whenever the app starts. The first use of an optional engine automatically sets up private CPU inference libraries and downloads its weights. No separate Python installation or administrator rights are needed. Downloads are cached under `%LOCALAPPDATA%\AAC Spellchecker`. After setup, that engine works offline. Drafts are never sent to the download providers.
+
+| Engine | Suggested PC RAM | Notes |
+| --- | --- | --- |
+| Windows Spell Checking (default) | 8 GB or 16 GB | Uses the installed English (US) Windows dictionary. No download. |
+| [NeuSpell BERT](https://huggingface.co/murali1996/bert-base-cased-spell-correction) | 8 GB or 16 GB | Uses sentence context for word-level corrections. About 744 MB of model files. |
+| [NeuSpell SC-LSTM](https://github.com/neuspell/neuspell) | 8 GB or 16 GB | Uses letters and context to suggest word-level corrections. About 452 MB. |
+| [BART English Spelling Correction](https://huggingface.co/oliverguhr/spelling-correction-english-base) | 8 GB or 16 GB | Experimental text-generation model. Can change punctuation or wording. About 561 MB. |
+| [T5-large-spell](https://huggingface.co/ai-forever/T5-large-spell) | 16 GB recommended | Generates a corrected version of the input. About 3 GB. |
+| [SAGE mT5 Large](https://huggingface.co/ai-forever/sage-mt5-large) | 16 GB recommended | Large multilingual model with English support. About 4.9 GB. |
+| [Spell Correct Transformer](https://huggingface.co/torinriley/spell-correct-transformer) | 8 GB or 16 GB | Experimental, one word at a time, no context. About 4 MB. |
+
+These are RAM recommendations, not minimums or model download sizes. Allow additional disk space for the shared inference libraries. The large models may respond slowly on CPU. Review all model changes before applying them, especially with names, numbers or shorthand. Switch back to Windows Spell Checking if a download fails or you want to check a draft without waiting.
 
 ## Download
 
@@ -40,4 +56,4 @@ go test ./...
 go build -buildvcs=false -trimpath -ldflags "-s -w -H windowsgui" -o Tobi-Dynavox-Spellchecker.exe .
 ```
 
-Portable unit tests cover UTF-16 replacement offsets, stale-draft protection, read-back verification and undo. Windows-only tests exercise the system dictionary and initialize the real UI Automation service. Live device testing is still needed for the TD Snap direct route.
+Portable unit tests cover the engine catalog, model-preview validation, UTF-16 replacement offsets, stale-draft protection, read-back verification and undo. The Windows CI smoke test provisions the runtime and checks one optional model before and after blocking downloads. Windows-only tests exercise the system dictionary and initialize the real UI Automation service. Live device testing is still needed for the TD Snap direct route.
