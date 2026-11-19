@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="A portable offline Windows spellchecker for AAC drafts. Review spelling corrections before applying them to your speech field or copying them back.">
+<meta name="description" content="A portable offline Windows spellchecker for AAC drafts. Review spelling corrections from a linked AAC button without manual copy and paste.">
 <title>Tobi Dynavox Spellchecker | Offline spelling review for AAC</title>
 <style>
 :root{color-scheme:light;--ink:#132b28;--quiet:#405a54;--accent:#005443;--paper:#f4f7ef;--line:#c8d7cc;--white:#fff}
@@ -15,23 +15,24 @@
 <header><div class="wrap"><span class="brand">Tobi Dynavox Spellchecker</span><span class="status">Independent AAC utility</span></div></header>
 <main id="main">
 <div class="wrap hero">
-<div><p class="eyebrow">Offline spelling review for Windows AAC</p><h1>Check your spelling before you speak.</h1><p class="lede">Review and edit spelling suggestions for a draft in your AAC speech field. Apply the correction when you’re ready, or copy it back yourself.</p>
-<div class="actions"><a class="button primary" href="downloads/Tobi-Dynavox-Spellchecker.exe" download>Download Windows EXE</a><a class="button" href="#how">How it works</a></div>
-<p class="small">Windows 10 or 11 · x64 · Windows spelling by default · Six optional local models</p></div>
+<div><p class="eyebrow">Offline spelling review for Windows AAC</p><h1>Check your spelling before you speak.</h1><p class="lede">Set up a Spell Check button on your TD Snap keyboard, then review and return corrections to your draft without manual copy and paste on compatible devices.</p>
+<div class="actions"><a class="button primary" href="https://github.com/tbenitz/Tobi-Dynavox-Spellchecker/releases/download/v0.2.0/Tobi-Dynavox-Spellchecker.exe">Download Windows preview EXE</a><a class="button" href="#how">How it works</a></div>
+<p class="small">v0.2.0 preview · Windows 10 or 11 x64 · Six optional local models</p></div>
 <figure class="sample"><figcaption class="eyebrow">Example spelling review</figcaption><span class="small">Original draft</span><p>I <del>wnat</del> a glass of water.</p><hr><span class="small">Suggested correction</span><p>I <strong>want</strong> a glass of water.</p><span class="small">Nothing is applied until you choose to apply it.</span></figure>
 </div>
 <section class="band" id="how"><div class="wrap"><h2>From draft to reviewed text</h2><ol class="steps">
-<li><span class="eyebrow">01</span><h3>Capture your draft</h3><p>Run the EXE. Focus the speech field and press <kbd>Ctrl+Alt+F8</kbd>, or choose <strong>Capture field</strong> and point at it within five seconds.</p></li>
+<li><span class="eyebrow">01</span><h3>Dwell on Spell Check</h3><p>After the one-time setup, write a draft in TD Snap and choose the Spell Check button on your AAC keyboard page.</p></li>
 <li><span class="eyebrow">02</span><h3>Review the suggestion</h3><p>Read the proposed correction and change anything you want to keep. Names and specialized words can be flagged incorrectly.</p></li>
-<li><span class="eyebrow">03</span><h3>Apply or copy it back</h3><p>Choose <strong>Apply to AAC</strong> if the field supports direct editing. Otherwise, use <strong>Copy correction</strong> and paste it into your AAC app.</p></li>
+<li><span class="eyebrow">03</span><h3>Use it or keep your draft</h3><p>Choose <strong>Use correction</strong> to update the linked AAC Message Window, or <strong>Keep original</strong> to go back without changing the draft.</p></li>
 </ol></div></section>
 <section class="wrap"><div class="more"><h2>Before you try it</h2>
-<details open><summary>Will it edit the TD Snap Message Window directly?</summary><p>Direct editing requires a plain-text field that exposes a writable Windows UI Automation value. It has not been verified on a physical Tobii Dynavox device. Try a short unsent draft first. If editing isn’t available, copy the draft from TD Snap, choose <strong>Paste draft</strong> and <strong>Check spelling</strong> in the spellchecker, then copy and paste the reviewed text back into TD Snap.</p></details>
-<details open><summary>Which spelling engines can I use?</summary><p><strong>Windows Spell Checking</strong> is the default and needs no download. The spelling engine menu also offers <strong>NeuSpell BERT, NeuSpell SC-LSTM, BART English Spelling Correction, T5-large-spell, SAGE mT5 Large,</strong> and <strong>Spell Correct Transformer</strong>.</p><p>The first spelling check with an optional engine downloads its files and the shared CPU runtime. The engine then works offline. For the two large T5 models, 16 GB RAM is recommended. The others are the lighter choices for 8 GB PCs. Always review the suggested changes.</p></details>
+<details open><summary>How do I set up the eye-gaze button?</summary><p>In the EXE, choose <strong>Link AAC field</strong> and point at the TD Snap Message Window when prompted. In TD Snap's editor, add a <strong>Spell Check</strong> button with the <strong>Launch Application</strong> action. Use the EXE as the application and enter <code>--check</code> under Advanced Command Line Arguments. <a href="https://github.com/tbenitz/Tobi-Dynavox-Spellchecker#td-snap-setup-for-eye-gaze">See full setup instructions</a>.</p></details>
+<details open><summary>Will this work on my device?</summary><p>Direct editing requires a linked, writable plain-text field and gaze controls that can click Windows buttons outside TD Snap. It has not been verified on a physical Tobii Dynavox device. Test with an unsent draft first. If linking or editing is blocked, the gaze workflow reports the limitation instead of using the clipboard.</p></details>
+<details open><summary>Which spelling engines can I use?</summary><p><strong>Windows Spell Checking</strong> is the default and needs no download. The spelling engine menu also offers <strong>NeuSpell BERT, NeuSpell SC-LSTM, BART English Spelling Correction, T5-large-spell, SAGE mT5 Large,</strong> and <strong>Spell Correct Transformer</strong>.</p><p>The first spelling check with an optional engine downloads its files and the shared CPU runtime. After that, the engine works offline. If a model fails during gaze review, choose <strong>Use Windows spelling</strong> to check the same draft. For the two large T5 models, 16 GB RAM is recommended. The others are the lighter choices for 8 GB PCs. Always review the suggested changes.</p></details>
 <details><summary>Does it speak, record, or send my draft?</summary><p>Spelling runs on your computer. Model downloads do not include your drafts, and the app does not record them. It never presses Speak. If your AAC app is set to speak when text is inserted, that setting still applies.</p></details>
-<details><summary>What happens if the draft changes?</summary><p>The spellchecker won’t overwrite a draft that changed after capture. <strong>Undo AAC fix</strong> can restore the previous text if the field still contains the correction. Use your AAC app’s own editing tools for drafts with symbols or formatting you need to preserve.</p></details>
+<details><summary>What happens if the draft changes?</summary><p>The spellchecker won’t overwrite a draft that changed after capture. Choose <strong>Keep original</strong> in the gaze review to leave the draft untouched. Use your AAC app’s own editing tools for drafts with symbols or formatting you need to preserve.</p></details>
 <details><summary>Why might Windows show a warning?</summary><p>The EXE is unsigned. Windows may show a warning for a new unsigned app. The spellchecker does not need administrator privileges.</p></details>
-<p class="download-info" style="margin-top:1.4rem"><a href="downloads/Tobi-Dynavox-Spellchecker-source.zip" download>Download source ZIP</a> · <a href="https://github.com/tbenitz/Tobi-Dynavox-Spellchecker">View the GitHub repository</a></p>
+<p class="download-info" style="margin-top:1.4rem"><a href="https://github.com/tbenitz/Tobi-Dynavox-Spellchecker/releases/download/v0.2.0/Tobi-Dynavox-Spellchecker-source.zip">Download source ZIP</a> · <a href="https://github.com/tbenitz/Tobi-Dynavox-Spellchecker">View the GitHub repository</a></p>
 </div></section>
 </main>
 <footer><div class="wrap small">An independent project. Not affiliated with or endorsed by Tobii Dynavox.</div></footer>

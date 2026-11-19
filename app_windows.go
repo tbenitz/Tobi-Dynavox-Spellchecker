@@ -97,19 +97,26 @@ const (
 	idStatus
 	idEngineLabel
 	idEngine
+	idLink
+	idKeep
+	idGaze
+	idGazeFallback
 )
 
 type task struct {
-	kind   int
-	at     *point
-	s      string
-	engine engine
+	kind    int
+	at      *point
+	s       string
+	engine  engine
+	source  uintptr
+	profile gazeProfile
 }
 type result struct {
 	kind                      int
 	status, original, preview string
 	checked, attached, undo   bool
 	err                       error
+	profile                   gazeProfile
 }
 
 var jobs = make(chan task, 1)
@@ -129,6 +136,8 @@ func worker(hwnd uintptr) {
 	defer func() { ui.release(); sp.release() }()
 	var field *captured
 	var capturedText, undoText string
+	var gazeSource uintptr
+	var gazeTarget gazeProfile
 	var canUndo bool
 	detach := func() {
 		if field != nil {
@@ -138,6 +147,7 @@ func worker(hwnd uintptr) {
 		capturedText = ""
 		canUndo = false
 		undoText = ""
+		gazeSource = 0
 	}
 	defer detach()
 	check := func(e engine, s string) (string, int, error) {
@@ -165,7 +175,7 @@ func worker(hwnd uintptr) {
 	for j := range jobs {
 		out := result{kind: j.kind}
 		switch j.kind {
-		case idCapture:
+		case idCapture, idLink, idGaze:
 			detach()
 			if !ready {
 				out.err = fmt.Errorf("Windows accessibility services did not start.")
@@ -177,7 +187,23 @@ func worker(hwnd uintptr) {
 			if out.err != nil {
 				break
 			}
-			field, capturedText, out.err = getField(ui, j.at)
+			switch j.kind {
+			case idLink:
+				if j.at == nil {
+					out.err = fmt.Errorf("Point at the AAC Message Window to link it.")
+					break
+				}
+				out.profile, out.err = bindGazeField(ui, *j.at, j.profile)
+				out.status = "AAC field linked. Now add the Spell Check button to your AAC page."
+			case idGaze:
+				field, capturedText, out.err = findGazeField(ui, j.source, j.profile)
+				gazeSource, gazeTarget = j.source, j.profile
+			default:
+				field, capturedText, out.err = getField(ui, j.at)
+			}
+			if j.kind == idLink {
+				break
+			}
 			if out.err != nil {
 				break
 			}
@@ -197,8 +223,15 @@ func worker(hwnd uintptr) {
 			out.preview = proposed
 			out.checked = true
 			out.status = checkStatus(j.engine, n, true)
-		case idCheck:
+		case idCheck, idGazeFallback:
 			var n int
+			if j.kind == idGazeFallback {
+				if field == nil || gazeSource == 0 {
+					out.err = fmt.Errorf("The AAC draft is no longer linked. Return to AAC and try again.")
+					break
+				}
+				j.s = capturedText
+			}
 			out.preview, n, out.err = check(j.engine, j.s)
 			out.checked = out.err == nil
 			out.status = checkStatus(j.engine, n, field != nil)
@@ -206,6 +239,20 @@ func worker(hwnd uintptr) {
 			if field == nil {
 				out.err = fmt.Errorf("No AAC field is attached. Use Copy correction and paste in AAC.")
 				break
+			}
+			if gazeSource != 0 {
+				current, _, err := findGazeField(ui, gazeSource, gazeTarget)
+				if err != nil {
+					out.err = err
+					break
+				}
+				var same uint32
+				hr := ui.invoke(3, uintptr(unsafe.Pointer(field.el)), uintptr(unsafe.Pointer(current.el)), uintptr(unsafe.Pointer(&same)))
+				current.el.release()
+				if !ok(hr) || same == 0 {
+					out.err = fmt.Errorf("The linked AAC field changed. Nothing was written.")
+					break
+				}
 			}
 			j.s = matchLineEndings(j.s, capturedText)
 			out.err = writeReviewed(field, capturedText, j.s)
@@ -274,9 +321,28 @@ func spellStatus(n int, attached bool) string {
 var controls = map[int]uintptr{}
 var hwnd, instance, font, larger uintptr
 var busy, holding, attached, undo, previewValid, updating, hotkeyOK bool
+var gazeMode, closingReview, applyingReview bool
+var gazeModelFailed bool
+var gazeEngineID string
+var pendingCapture = idCapture
+var profile gazeProfile
+var gazeOrigin uintptr
 
 func main() {
 	runtime.LockOSThread()
+	setDPIAware.Call()
+	gazeMode = len(os.Args) == 2 && os.Args[1] == "--check"
+	var source uintptr
+	profile = loadProfile()
+	if gazeMode {
+		source, _, _ = foregroundWindow.Call()
+		gazeOrigin = source
+		lock, _, lockErr := createMutex.Call(0, 0, uintptr(unsafe.Pointer(wide(`Local\AACSpellcheckerReviewV1`))))
+		if lock == 0 || lockErr == syscall.Errno(183) {
+			return
+		}
+		defer closeHandle.Call(lock)
+	}
 	instance, _, _ = getModule.Call(0)
 	c, _, _ := loadCursor.Call(0, 32512)
 	icon, _, _ := loadIcon.Call(0, 32512)
@@ -284,20 +350,26 @@ func main() {
 	wc.size = uint32(unsafe.Sizeof(wc))
 	atom, _, _ := regClass.Call(uintptr(unsafe.Pointer(&wc)))
 	if atom != 0 {
-		hwnd = create(0, "AACSpellcheckerWindow", title, 0x00cf0000, 0x80000000, 0x80000000, 730, 600, 0, 0)
+		style := uintptr(0)
+		if gazeMode {
+			style = 0x8 // WS_EX_TOPMOST, so review is visible over AAC.
+		}
+		hwnd = create(style, "AACSpellcheckerWindow", title, 0x00cf0000, 0x80000000, 0x80000000, 730, 600, 0, 0)
 	}
 	if hwnd == 0 {
 		msgBox.Call(0, uintptr(unsafe.Pointer(wide("The AAC Spellchecker window could not start."))), uintptr(unsafe.Pointer(wide(title))), 0x10)
 		os.Exit(1)
 	}
 	go worker(hwnd)
-	hot, _, _ := registerHotkey.Call(hwnd, 1, 0x4003, 0x77) // Ctrl+Alt+F8, no repeat
-	hotkeyOK = hot != 0
-	if !hotkeyOK {
-		status("Ctrl+Alt+F8 is unavailable. Use Capture field or Paste draft.")
+	if gazeMode {
+		start(task{kind: idGaze, source: source, profile: profile})
+		activateApp()
+	} else {
+		hot, _, _ := registerHotkey.Call(hwnd, 1, 0x4003, 0x77)
+		hotkeyOK = hot != 0
+		show.Call(hwnd, 5)
+		update.Call(hwnd)
 	}
-	show.Call(hwnd, 5)
-	update.Call(hwnd)
 	var m message
 	for {
 		r, _, _ := getMsg.Call(uintptr(unsafe.Pointer(&m)), 0, 0, 0)
@@ -330,22 +402,42 @@ func makeFont(h, weight int) uintptr {
 }
 func initControls(h uintptr) {
 	font, larger = makeFont(18, 400), makeFont(25, 650)
+	if gazeMode {
+		widget(h, idHeader, "STATIC", "Review your spelling", 0, 0, larger)
+		widget(h, idStatus, "STATIC", "Checking your draft…", 0, 0, font)
+		widget(h, idOriginal, "STATIC", "Original draft", 0, 0, font)
+		widget(h, idPreview, "STATIC", "Suggested correction", 0, 0, font)
+		widget(h, idInput, "EDIT", "", 0x211044, 0x200, font)
+		widget(h, idOutput, "EDIT", "", 0x211044, 0x200, font)
+		widget(h, idApply, "BUTTON", "Use correction", 0x10000, 0, larger)
+		widget(h, idKeep, "BUTTON", "Keep original", 0x10000, 0, larger)
+		widget(h, idGazeFallback, "BUTTON", "Use Windows spelling", 0x10000, 0, larger)
+		for _, id := range []int{idInput, idOutput} {
+			send.Call(controls[id], 0xC5, maxDraft, 0)
+		}
+		syncControls()
+		return
+	}
 	widget(h, idHeader, "STATIC", title, 0, 0, larger)
-	widget(h, idHelp, "STATIC", "Press Ctrl+Alt+F8 while focused on the AAC speech field. Or choose Capture field and point at it within five seconds.", 0, 0, font)
+	widget(h, idHelp, "STATIC", "For gaze-only use, link the AAC Message Window once, then add a Spell Check button to the AAC keyboard page.", 0, 0, font)
 	widget(h, idOriginal, "STATIC", "Original draft", 0, 0, font)
 	widget(h, idEngineLabel, "STATIC", "&Spelling engine", 0, 0, font)
 	widget(h, idEngine, "COMBOBOX", "", 0x210003, 0, font) // tab stop, scroll, dropdown list
-	for _, e := range engines {
-		send.Call(controls[idEngine], 0x143, 0, uintptr(unsafe.Pointer(wide(e.label)))) // CB_ADDSTRING
+	selection := 0
+	for i, e := range engines {
+		send.Call(controls[idEngine], 0x143, 0, uintptr(unsafe.Pointer(wide(e.label))))
+		if e.id == profile.Engine {
+			selection = i
+		}
 	}
-	send.Call(controls[idEngine], 0x14e, 0, 0) // CB_SETCURSEL: Windows is the default
+	send.Call(controls[idEngine], 0x14e, uintptr(selection), 0)
 	widget(h, idPreview, "STATIC", "Review and edit the correction", 0, 0, font)
 	widget(h, idStatus, "STATIC", "Offline English (US) spelling. This app does not press Speak.", 0, 0, font)
 	for _, b := range []struct {
 		id    int
 		label string
 	}{
-		{idCapture, "&Capture field"}, {idPaste, "&Paste draft"}, {idCheck, "Check &spelling"}, {idApply, "&Apply to AAC"},
+		{idLink, "&Link AAC field"}, {idCapture, "&Capture field"}, {idPaste, "&Paste draft"}, {idCheck, "Check &spelling"}, {idApply, "&Apply to AAC"},
 		{idUndo, "&Undo AAC fix"}, {idCopy, "C&opy correction"}, {idClear, "C&lear"},
 	} {
 		widget(h, b.id, "BUTTON", b.label, 0x10000, 0, font)
@@ -373,11 +465,27 @@ func layout(h uintptr) {
 			box(id, 16+i*(width+8), y, width, 42)
 		}
 	}
+	if gazeMode {
+		box(idHeader, 20, 18, w-40, 34)
+		box(idStatus, 20, 64, w-40, 64)
+		part := (v - 295) / 2
+		box(idOriginal, 20, 137, w-40, 24)
+		box(idInput, 20, 161, w-40, part)
+		box(idPreview, 20, 172+part, w-40, 24)
+		box(idOutput, 20, 196+part, w-40, part)
+		b := (w - 56) / 2
+		box(idKeep, 20, v-86, b, 66)
+		box(idApply, w-20-b, v-86, b, 66)
+		// Keep fallback and Apply at different coordinates. A lingering
+		// dwell over a fallback button must not approve its new result.
+		box(idGazeFallback, w-20-b, 196+part, b, 66)
+		return
+	}
 	box(idHeader, 16, 12, w-32, 31)
 	box(idHelp, 16, 48, w-32, 43)
 	box(idEngineLabel, 16, 97, 130, 23)
 	box(idEngine, 152, 94, w-168, 270)
-	row(135, idCapture, idPaste, idCheck)
+	row(135, idLink, idCapture, idPaste, idCheck)
 	panel := max(42, (v-356)/2)
 	box(idOriginal, 16, 186, w-32, 23)
 	box(idInput, 16, 211, w-32, panel)
@@ -392,6 +500,11 @@ func wndProc(h uintptr, m uint32, w, l uintptr) uintptr {
 	case 1:
 		initControls(h)
 		return 0
+	case 0x0010: // WM_CLOSE
+		if gazeMode {
+			closeReview(h)
+			return 0
+		}
 	case 2:
 		stopModels()
 		if hotkeyOK {
@@ -427,7 +540,7 @@ func wndProc(h uintptr, m uint32, w, l uintptr) uintptr {
 			var p point
 			ok, _, _ := cursor.Call(uintptr(unsafe.Pointer(&p)))
 			if ok != 0 {
-				start(task{kind: idCapture, at: &p})
+				start(task{kind: pendingCapture, at: &p, profile: profile})
 			} else {
 				status("Could not get the pointer location.")
 				syncControls()
@@ -437,7 +550,7 @@ func wndProc(h uintptr, m uint32, w, l uintptr) uintptr {
 	case wmModelProgress:
 		select {
 		case message := <-statusUpdates:
-			if busy {
+			if busy && !closingReview {
 				status(message)
 			}
 		default:
@@ -452,7 +565,22 @@ func wndProc(h uintptr, m uint32, w, l uintptr) uintptr {
 		return 0
 	case 0x0111:
 		id, n := int(w&0xffff), uint32(w>>16)
+		if gazeMode && id == idKeep && l != 0 && n == 0 {
+			closeReview(h)
+			return 0
+		}
+		if gazeMode && id == idGazeFallback && l != 0 && n == 0 && !busy && gazeModelFailed {
+			start(task{kind: idGazeFallback})
+			return 0
+		}
 		if id == idEngine && n == 1 && !busy && !holding { // CBN_SELCHANGE
+			next := profile
+			next.Engine = selectedEngine().id
+			if err := saveProfile(next); err != nil {
+				status("Engine choice could not be saved for the AAC button.")
+				return 0
+			}
+			profile = next
 			setBox(idOutput, "")
 			previewValid = false
 			if selectedEngine().id == "windows" {
@@ -471,7 +599,7 @@ func wndProc(h uintptr, m uint32, w, l uintptr) uintptr {
 			}
 			syncControls()
 		}
-		if l != 0 && n == 0 && !busy && !holding && id >= idCapture && id <= idClear {
+		if l != 0 && n == 0 && !busy && !holding && (id >= idCapture && id <= idClear || id == idLink) {
 			action(h, id)
 			return 0
 		}
@@ -502,44 +630,90 @@ func textBox(id int) string {
 }
 func activateApp() { show.Call(hwnd, 9); activate.Call(hwnd) }
 func selectedEngine() engine {
+	if gazeMode {
+		return getEngine(profile.Engine)
+	}
 	value, _, _ := send.Call(controls[idEngine], 0x147, 0, 0) // CB_GETCURSEL
 	return engineAt(int(value))
 }
 func start(t task) {
 	t.engine = selectedEngine()
+	if t.kind == idGazeFallback {
+		t.engine = engines[0]
+	}
+	if gazeMode {
+		gazeEngineID = t.engine.id
+		gazeModelFailed = false
+	}
 	busy = true
+	applyingReview = t.kind == idApply
 	status("Working…")
 	syncControls()
 	jobs <- t
 }
 func finish(r result) {
 	busy = false
-	attached, undo = r.attached, r.undo
-	if r.kind == idCapture || r.kind == idPaste || r.kind == idClear {
-		if r.err == nil || r.original != "" {
-			setBox(idInput, r.original)
-			setBox(idOutput, r.preview)
-			previewValid = r.checked
+	applyingReview = false
+	if gazeMode && (closingReview || r.kind == idApply && r.err == nil) {
+		returnToAAC(hwnd, true)
+		return
+	}
+	if r.kind == idLink {
+		if r.err == nil {
+			r.err = saveProfile(r.profile)
+			if r.err == nil {
+				profile = r.profile
+			}
 		}
-		if r.kind == idCapture {
+		if r.err != nil {
+			status(r.err.Error())
+		} else {
+			status(r.status)
+		}
+		activateApp()
+		syncControls()
+		return
+	}
+	attached, undo = r.attached, r.undo
+	if r.kind == idGaze || r.kind == idGazeFallback {
+		gazeModelFailed = r.err != nil && r.attached && gazeEngineID != "windows"
+	}
+	if r.kind == idCapture || r.kind == idGaze || r.kind == idPaste || r.kind == idClear {
+		setBox(idInput, r.original)
+		setBox(idOutput, r.preview)
+		previewValid = r.checked
+		if r.kind == idCapture || r.kind == idGaze {
 			activateApp()
 		}
 	}
-	if r.err == nil && (r.kind == idCheck || r.kind == idApply || r.kind == idUndo) {
-		if r.kind != idCheck {
+	if r.err == nil && (r.kind == idCheck || r.kind == idApply || r.kind == idUndo || r.kind == idGazeFallback) {
+		if r.kind != idCheck && r.kind != idGazeFallback {
 			setBox(idInput, r.original)
 		}
 		setBox(idOutput, r.preview)
 		previewValid = r.checked
 	}
 	if r.err != nil {
+		if gazeMode && r.kind == idApply {
+			previewValid = false
+		}
 		status(r.err.Error())
 	} else {
-		status(r.status)
+		message := r.status
+		if r.kind == idGaze || r.kind == idGazeFallback {
+			message = "Review the suggestion. Use correction writes it back to your AAC draft."
+			if textBox(idInput) == textBox(idOutput) {
+				message = "No spelling changes suggested. Choose Keep original to return to AAC."
+			}
+		}
+		status(message)
 	}
 	syncControls()
 	if r.kind == idClear || r.kind == idPaste {
 		setFocus.Call(controls[idInput])
+	}
+	if r.kind == idGaze || r.kind == idGazeFallback {
+		setFocus.Call(controls[idKeep])
 	}
 	if r.kind == idCapture || r.kind == idCheck {
 		setFocus.Call(controls[idOutput])
@@ -556,7 +730,30 @@ func syncControls() {
 		}
 		enable.Call(controls[id], v)
 	}
-	for _, id := range []int{idCapture, idPaste, idClear} {
+	if gazeMode {
+		on(idKeep, !closingReview && (!busy || !applyingReview))
+		apply, fallback := (gazeReview{
+			busy: !idle, attached: attached, valid: previewValid, modelFailed: gazeModelFailed,
+			draft: draft, proposal: corrected, engineID: gazeEngineID,
+		}).actions()
+		on(idApply, apply)
+		on(idGazeFallback, fallback)
+		if fallback {
+			show.Call(controls[idOutput], 0)
+			show.Call(controls[idGazeFallback], 8) // SW_SHOWNA
+		} else {
+			show.Call(controls[idGazeFallback], 0)
+			show.Call(controls[idOutput], 8)
+		}
+		send.Call(controls[idInput], 0xCF, 1, 0)
+		var readOnly uintptr
+		if !idle || !previewValid {
+			readOnly = 1
+		}
+		send.Call(controls[idOutput], 0xCF, readOnly, 0)
+		return
+	}
+	for _, id := range []int{idLink, idCapture, idPaste, idClear} {
 		on(id, idle)
 	}
 	on(idEngine, idle)
@@ -577,15 +774,24 @@ func syncControls() {
 
 func action(h uintptr, id int) {
 	switch id {
-	case idCapture:
+	case idCapture, idLink:
+		pendingCapture = id
 		holding = true
-		timer, _, _ := setTimer.Call(h, 1, 5000, 0)
+		delay := uintptr(5000)
+		if id == idLink {
+			delay = 12000
+		}
+		if id == idLink {
+			msgBox.Call(h, uintptr(unsafe.Pointer(wide("After choosing OK, point at the AAC Message Window and leave the pointer there. This one-time setup takes 12 seconds."))), uintptr(unsafe.Pointer(wide(title))), 0x40)
+		}
+		timer, _, _ := setTimer.Call(h, 1, delay, 0)
 		if timer == 0 {
 			holding = false
-			status("The capture timer could not start. Try Ctrl+Alt+F8 or Paste draft.")
+			status("The field setup timer could not start.")
+			syncControls()
 			return
 		}
-		status("Point at the AAC Message Window within 5 seconds. The app will minimize.")
+		status("Point at the AAC Message Window. The app will minimize.")
 		syncControls()
 		show.Call(h, 6)
 	case idPaste:
@@ -598,6 +804,9 @@ func action(h uintptr, id int) {
 	case idCheck:
 		start(task{kind: idCheck, s: textBox(idInput)})
 	case idApply:
+		if gazeMode && (!attached || !previewValid) {
+			return
+		}
 		start(task{kind: idApply, s: textBox(idOutput)})
 	case idUndo:
 		start(task{kind: idUndo})
@@ -609,6 +818,30 @@ func action(h uintptr, id int) {
 		}
 	case idClear:
 		start(task{kind: idClear})
+	}
+}
+
+func closeReview(h uintptr) {
+	if busy {
+		if applyingReview {
+			return
+		}
+		closingReview = true
+		stopModels()
+		returnToAAC(h, false)
+		return
+	}
+	returnToAAC(h, true)
+}
+
+func returnToAAC(h uintptr, close bool) {
+	active, _, _ := foregroundWindow.Call()
+	if active == h && gazeOrigin != 0 {
+		activate.Call(gazeOrigin)
+	}
+	show.Call(h, 0)
+	if close {
+		destroyWindow.Call(h)
 	}
 }
 
