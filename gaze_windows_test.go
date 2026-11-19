@@ -21,7 +21,7 @@ func TestLinkedGazeFieldReadWrite(t *testing.T) {
 		runtime.LockOSThread()
 		instance, _, _ = getModule.Call(0)
 		root := create(0, "STATIC", "Test AAC window", 0x00cf0000, 30, 30, 400, 250, 0, 0)
-		field := create(0x200, "EDIT", "I have a speling problem.", 0x50010080, 20, 20, 275, 28, root, 4242)
+		field := create(0x200, "EDIT", "i has a speling problem.", 0x50010080, 20, 20, 275, 28, root, 4242)
 		if root == 0 || field == 0 {
 			os.Exit(1)
 		}
@@ -80,7 +80,7 @@ func TestLinkedGazeFieldReadWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer field.el.release()
-	if original != "I have a speling problem." {
+	if original != "i has a speling problem." {
 		t.Fatalf("unexpected text in linked field: %q", original)
 	}
 	const corrected = "I have a spelling problem."
@@ -92,7 +92,8 @@ func TestLinkedGazeFieldReadWrite(t *testing.T) {
 	record := autoRecord{source: window, profile: p, field: field, original: original}
 	var changed bool
 	record.corrected, changed, err = autoCorrect(field, original, func(draft string) (string, error) {
-		proposed, _, err := propose(sp, draft)
+		proposed, n, err := propose(sp, basicProofread(draft))
+		proposed, _, err = finishProofreading(draft, proposed, n, err)
 		return proposed, err
 	}, func() error { return record.verify(ui) })
 	if err != nil || !changed || record.corrected != corrected {

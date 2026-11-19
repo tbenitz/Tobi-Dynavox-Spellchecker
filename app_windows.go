@@ -154,7 +154,7 @@ func worker(hwnd uintptr) {
 		undoText = ""
 	}
 	defer detach()
-	check := func(e engine, s string, approved bool) (string, int, error) {
+	engineCheck := func(e engine, s string, approved bool) (string, int, error) {
 		if p, cloud := providerFor(e.id); cloud {
 			if !approved {
 				return "", 0, fmt.Errorf("Start a spelling check explicitly to use %s.", p.name)
@@ -184,7 +184,11 @@ func worker(hwnd uintptr) {
 				return "", 0, err
 			}
 		}
-		return propose(sp, s)
+		return propose(sp, basicProofread(s))
+	}
+	check := func(e engine, s string, approved bool) (string, int, error) {
+		proposal, n, err := engineCheck(e, s, approved)
+		return finishProofreading(s, proposal, n, err)
 	}
 	ensureUI := func() error {
 		if !ready {
@@ -250,7 +254,7 @@ func worker(hwnd uintptr) {
 				automaticUndo = record
 			} else {
 				record.release()
-				out.status = "No spelling changes."
+				out.status = "No proofreading changes."
 			}
 		case idAutoUndo:
 			if automaticUndo == nil {
@@ -383,12 +387,12 @@ func checkStatus(e engine, n int, attached bool) string {
 
 func spellStatus(n int, attached bool) string {
 	if n == 0 {
-		return "No spelling replacements suggested. You can still edit the preview."
+		return "No proofreading changes suggested. You can still edit the preview."
 	}
 	if attached {
-		return fmt.Sprintf("%d spelling suggestion(s). Review, then choose Apply to AAC.", n)
+		return "Proofreading complete. Review, then choose Apply to AAC."
 	}
-	return fmt.Sprintf("%d spelling suggestion(s). Review, then choose Copy correction.", n)
+	return "Proofreading complete. Review, then choose Copy correction."
 }
 
 var controls = map[int]uintptr{}
