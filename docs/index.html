@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="A portable offline Windows spellchecker for AAC drafts. Review spelling corrections before applying them to your speech field or copying them back.">
+<title>Tobi Dynavox Spellchecker | Offline spelling review for AAC</title>
+<style>
+:root{color-scheme:light;--ink:#132b28;--quiet:#405a54;--accent:#005443;--paper:#f4f7ef;--line:#c8d7cc;--white:#fff}
+*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:1rem/1.6 system-ui,sans-serif}a{color:var(--accent);text-underline-offset:.2em}a:focus-visible,summary:focus-visible{outline:3px solid #97500d;outline-offset:4px}.wrap{width:min(70rem,100% - 2.5rem);margin:auto}.skip{position:absolute;left:1rem;top:-5rem;background:white;padding:.75rem;z-index:2}.skip:focus{top:1rem}header .wrap{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.5rem;padding:1.3rem 0;border-bottom:1px solid var(--line)}.brand{font-weight:750}.status,.eyebrow{font-size:.8rem;letter-spacing:.1em;font-weight:750;text-transform:uppercase;color:var(--accent)}.status{padding:.22rem .7rem;border:1px solid var(--line);border-radius:2rem}.hero{display:grid;grid-template-columns:1.25fr 1fr;gap:clamp(1.5rem,6vw,5rem);align-items:center;padding:clamp(3rem,9vw,7rem) 0}h1,h2,h3,p{margin-top:0}h1{font-size:clamp(2.55rem,6vw,5.25rem);line-height:1.02;letter-spacing:-.06em;margin-bottom:1.2rem}h2{font-size:clamp(1.65rem,3.5vw,2.5rem);line-height:1.15;letter-spacing:-.035em;margin-bottom:1rem}.lede{font-size:1.2rem;color:var(--quiet);max-width:42ch}.actions{display:flex;gap:.7rem;flex-wrap:wrap;margin:1.5rem 0 .65rem}.button{display:inline-flex;align-items:center;padding:.7rem 1rem;border:1px solid var(--accent);border-radius:.45rem;font-weight:720;text-decoration:none;min-height:3rem}.primary{background:var(--accent);color:white}.primary:hover{background:#003d31}.small{font-size:.9rem;color:var(--quiet)}.sample{background:var(--white);border:1px solid var(--line);border-radius:1rem;padding:clamp(1.2rem,4vw,2rem);box-shadow:0 1rem 2.5rem #13332812;margin:0}.sample p{font-size:clamp(1.1rem,2.5vw,1.5rem);margin:.25rem 0 1rem}.sample strong{color:var(--accent)}.sample del{color:#8a3d20}.sample hr{border:0;border-top:1px solid var(--line);margin:1rem 0}.band{background:var(--white);border-block:1px solid var(--line);padding:3rem 0}.steps{display:grid;grid-template-columns:repeat(3,1fr);gap:1rem;list-style:none;padding:0;margin:1.5rem 0 0}.steps li{border:1px solid var(--line);border-radius:.7rem;padding:1.2rem}.steps h3{margin:.5rem 0;font-size:1.12rem}.steps p{margin:0;color:var(--quiet)}.more{padding:3rem 0;max-width:48rem}details{border-bottom:1px solid var(--line);padding:.75rem 0}summary{font-weight:700;cursor:pointer;padding:.45rem 0}details p{margin:.55rem 0}.download-info{overflow-wrap:anywhere}footer .wrap{padding:1.2rem 0 2rem;border-top:1px solid var(--line)}@media(max-width:48rem){.hero,.steps{grid-template-columns:1fr}.hero{padding-bottom:2.7rem}}@media(max-width:27rem){.status{display:none}}
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header><div class="wrap"><span class="brand">Tobi Dynavox Spellchecker</span><span class="status">Independent AAC utility</span></div></header>
+<main id="main">
+<div class="wrap hero">
+<div><p class="eyebrow">Offline spelling review for Windows AAC</p><h1>Check your spelling before you speak.</h1><p class="lede">Review and edit spelling suggestions for a draft in your AAC speech field. Apply the correction when you’re ready, or copy it back yourself.</p>
+<div class="actions"><a class="button primary" href="downloads/Tobi-Dynavox-Spellchecker.exe" download>Download Windows EXE</a><a class="button" href="#how">How it works</a></div>
+<p class="small">Windows 10 or 11 · 64-bit · English (US) · No installer or account</p></div>
+<figure class="sample"><figcaption class="eyebrow">Example spelling review</figcaption><span class="small">Original draft</span><p>I <del>wnat</del> a glass of water.</p><hr><span class="small">Suggested correction</span><p>I <strong>want</strong> a glass of water.</p><span class="small">Nothing is applied until you choose to apply it.</span></figure>
+</div>
+<section class="band" id="how"><div class="wrap"><h2>From draft to reviewed text</h2><ol class="steps">
+<li><span class="eyebrow">01</span><h3>Capture your draft</h3><p>Run the EXE. Focus the speech field and press <kbd>Ctrl+Alt+F8</kbd>, or choose <strong>Capture field</strong> and point at it within five seconds.</p></li>
+<li><span class="eyebrow">02</span><h3>Review the suggestion</h3><p>Read the proposed correction and change anything you want to keep. Names and specialized words can be flagged incorrectly.</p></li>
+<li><span class="eyebrow">03</span><h3>Apply or copy it back</h3><p>Choose <strong>Apply to AAC</strong> if the field supports direct editing. Otherwise, use <strong>Copy correction</strong> and paste it into your AAC app.</p></li>
+</ol></div></section>
+<section class="wrap"><div class="more"><h2>Before you try it</h2>
+<details open><summary>Will it edit the TD Snap Message Window directly?</summary><p>Direct editing requires a plain-text field that exposes a writable Windows UI Automation value. It has not been verified on a physical Tobii Dynavox device. Try a short unsent draft first. If editing isn’t available, copy the draft from TD Snap, choose <strong>Paste draft</strong> and <strong>Check spelling</strong> in the spellchecker, then copy and paste the reviewed text back into TD Snap.</p></details>
+<details><summary>Does it speak, record, or send my draft?</summary><p>It uses the installed Windows English (US) spelling dictionary and works offline without recording or transmitting drafts. It never presses Speak. If your AAC app is set to speak when text is inserted, that setting still applies.</p></details>
+<details><summary>What happens if the draft changes?</summary><p>The spellchecker won’t overwrite a draft that changed after capture. <strong>Undo AAC fix</strong> can restore the previous text if the field still contains the correction. Use your AAC app’s own editing tools for drafts with symbols or formatting you need to preserve.</p></details>
+<details><summary>Why might Windows show a warning?</summary><p>The EXE is unsigned. Windows may show a warning for a new unsigned app. The spellchecker does not need administrator privileges.</p></details>
+<p class="download-info" style="margin-top:1.4rem"><a href="downloads/Tobi-Dynavox-Spellchecker-source.zip" download>Download source ZIP</a> · <a href="https://github.com/tbenitz/Tobi-Dynavox-Spellchecker">View the GitHub repository</a></p>
+</div></section>
+</main>
+<footer><div class="wrap small">An independent project. Not affiliated with or endorsed by Tobii Dynavox.</div></footer>
+</body></html>

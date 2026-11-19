@@ -1,0 +1,626 @@
+package main
+
+import (
+	"fmt"
+	"os"
+	"runtime"
+	"strings"
+	"syscall"
+	"unsafe"
+)
+
+var (
+	user             = syscall.NewLazyDLL("user32.dll")
+	kernel           = syscall.NewLazyDLL("kernel32.dll")
+	gdi              = syscall.NewLazyDLL("gdi32.dll")
+	regClass         = user.NewProc("RegisterClassExW")
+	createWin        = user.NewProc("CreateWindowExW")
+	defProc          = user.NewProc("DefWindowProcW")
+	show             = user.NewProc("ShowWindow")
+	update           = user.NewProc("UpdateWindow")
+	activate         = user.NewProc("SetForegroundWindow")
+	getMsg           = user.NewProc("GetMessageW")
+	isDialog         = user.NewProc("IsDialogMessageW")
+	translate        = user.NewProc("TranslateMessage")
+	dispatch         = user.NewProc("DispatchMessageW")
+	send             = user.NewProc("SendMessageW")
+	post             = user.NewProc("PostMessageW")
+	quit             = user.NewProc("PostQuitMessage")
+	getTextLen       = user.NewProc("GetWindowTextLengthW")
+	getText          = user.NewProc("GetWindowTextW")
+	setText          = user.NewProc("SetWindowTextW")
+	cursor           = user.NewProc("GetCursorPos")
+	setFocus         = user.NewProc("SetFocus")
+	loadCursor       = user.NewProc("LoadCursorW")
+	loadIcon         = user.NewProc("LoadIconW")
+	clientRect       = user.NewProc("GetClientRect")
+	move             = user.NewProc("MoveWindow")
+	enable           = user.NewProc("EnableWindow")
+	registerHotkey   = user.NewProc("RegisterHotKey")
+	unregisterHotkey = user.NewProc("UnregisterHotKey")
+	setTimer         = user.NewProc("SetTimer")
+	killTimer        = user.NewProc("KillTimer")
+	getModule        = kernel.NewProc("GetModuleHandleW")
+	createFont       = gdi.NewProc("CreateFontW")
+	deleteGDI        = gdi.NewProc("DeleteObject")
+	msgBox           = user.NewProc("MessageBoxW")
+	openClip         = user.NewProc("OpenClipboard")
+	closeClip        = user.NewProc("CloseClipboard")
+	getClip          = user.NewProc("GetClipboardData")
+	setClip          = user.NewProc("SetClipboardData")
+	emptyClip        = user.NewProc("EmptyClipboard")
+	globalAlloc      = kernel.NewProc("GlobalAlloc")
+	globalSize       = kernel.NewProc("GlobalSize")
+	globalLock       = kernel.NewProc("GlobalLock")
+	globalUnlock     = kernel.NewProc("GlobalUnlock")
+	globalFree       = kernel.NewProc("GlobalFree")
+	moveMemory       = kernel.NewProc("RtlMoveMemory")
+)
+
+type point struct{ x, y int32 }
+type rect struct{ l, t, r, b int32 }
+type message struct {
+	hwnd    uintptr
+	message uint32
+	w, l    uintptr
+	time    uint32
+	pt      point
+	private uint32
+}
+type wndClass struct {
+	size, style                        uint32
+	proc                               uintptr
+	clsExtra, winExtra                 int32
+	instance, icon, cursor, background uintptr
+	menu, class                        *uint16
+	iconSmall                          uintptr
+}
+
+const (
+	title     = "AAC Spellchecker"
+	wmDone    = 0x8001
+	idCapture = 101 + iota
+	idPaste
+	idCheck
+	idApply
+	idUndo
+	idCopy
+	idClear
+	idInput
+	idOutput
+	idHeader
+	idHelp
+	idOriginal
+	idPreview
+	idStatus
+)
+
+type task struct {
+	kind int
+	at   *point
+	s    string
+}
+type result struct {
+	kind                      int
+	status, original, preview string
+	checked, attached, undo   bool
+	err                       error
+}
+
+var jobs = make(chan task, 1)
+var results = make(chan result, 1)
+
+func worker(hwnd uintptr) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	r, _, _ := coInit.Call(0, 0)
+	ready := ok(r)
+	if ready {
+		defer coUninit.Call()
+	}
+	var ui, sp *com
+	defer func() { ui.release(); sp.release() }()
+	var field *captured
+	var capturedText, undoText string
+	var canUndo bool
+	detach := func() {
+		if field != nil {
+			field.el.release()
+		}
+		field = nil
+		capturedText = ""
+		canUndo = false
+		undoText = ""
+	}
+	defer detach()
+	check := func(s string) (string, int, error) {
+		if !ready {
+			return "", 0, fmt.Errorf("Windows text services did not start.")
+		}
+		if sp == nil {
+			var err error
+			sp, err = spellChecker("en-US")
+			if err != nil {
+				return "", 0, err
+			}
+		}
+		return propose(sp, s)
+	}
+	for j := range jobs {
+		out := result{kind: j.kind}
+		switch j.kind {
+		case idCapture:
+			detach()
+			if !ready {
+				out.err = fmt.Errorf("Windows accessibility services did not start.")
+				break
+			}
+			if ui == nil {
+				ui, out.err = makeCOM(&uiaClass, &uiaIID)
+			}
+			if out.err != nil {
+				break
+			}
+			field, capturedText, out.err = getField(ui, j.at)
+			if out.err != nil {
+				break
+			}
+			if strings.TrimSpace(capturedText) == "" {
+				detach()
+				out.err = fmt.Errorf("The captured field was empty. Write a draft in the AAC app first.")
+				break
+			}
+			out.original = capturedText
+			out.preview = capturedText
+			var n int
+			proposed, n, err := check(capturedText)
+			if err != nil {
+				out.err = err
+				break
+			}
+			out.preview = proposed
+			out.checked = true
+			out.status = spellStatus(n, true)
+		case idCheck:
+			var n int
+			out.preview, n, out.err = check(j.s)
+			out.checked = out.err == nil
+			out.status = spellStatus(n, field != nil)
+		case idApply:
+			if field == nil {
+				out.err = fmt.Errorf("No AAC field is attached. Use Copy correction and paste in AAC.")
+				break
+			}
+			j.s = matchLineEndings(j.s, capturedText)
+			out.err = writeReviewed(field, capturedText, j.s)
+			if out.err == nil {
+				undoText, capturedText = capturedText, j.s
+				canUndo = true
+				out.original = j.s
+				out.preview = j.s
+				out.checked = true
+				out.status = "Updated the captured AAC field. You can undo this replacement."
+			}
+		case idUndo:
+			if field == nil || !canUndo {
+				out.err = fmt.Errorf("There is no replacement to undo.")
+				break
+			}
+			out.err = writeReviewed(field, capturedText, undoText)
+			if out.err == nil {
+				capturedText = undoText
+				canUndo = false
+				undoText = ""
+				out.original = capturedText
+				out.preview = capturedText
+				out.checked = false
+				out.status = "Restored the original draft in AAC."
+			}
+		case idClear, idPaste:
+			detach()
+			out.original = j.s
+			if j.kind == idPaste {
+				out.status = "Draft pasted. Choose Check spelling to review suggestions."
+			} else {
+				out.status = "Cleared this window. The AAC draft was not changed."
+			}
+		}
+		out.attached = field != nil
+		out.undo = canUndo
+		results <- out
+		post.Call(hwnd, wmDone, 0, 0)
+	}
+}
+
+func spellStatus(n int, attached bool) string {
+	if n == 0 {
+		return "No spelling replacements suggested. You can still edit the preview."
+	}
+	if attached {
+		return fmt.Sprintf("%d spelling suggestion(s). Review, then choose Apply to AAC.", n)
+	}
+	return fmt.Sprintf("%d spelling suggestion(s). Review, then choose Copy correction.", n)
+}
+
+var controls = map[int]uintptr{}
+var hwnd, instance, font, larger uintptr
+var busy, holding, attached, undo, previewValid, updating, hotkeyOK bool
+
+func main() {
+	runtime.LockOSThread()
+	instance, _, _ = getModule.Call(0)
+	c, _, _ := loadCursor.Call(0, 32512)
+	icon, _, _ := loadIcon.Call(0, 32512)
+	wc := wndClass{proc: syscall.NewCallback(wndProc), instance: instance, cursor: c, icon: icon, iconSmall: icon, background: 16, class: wide("AACSpellcheckerWindow")}
+	wc.size = uint32(unsafe.Sizeof(wc))
+	atom, _, _ := regClass.Call(uintptr(unsafe.Pointer(&wc)))
+	if atom != 0 {
+		hwnd = create(0, "AACSpellcheckerWindow", title, 0x00cf0000, 0x80000000, 0x80000000, 690, 550, 0, 0)
+	}
+	if hwnd == 0 {
+		msgBox.Call(0, uintptr(unsafe.Pointer(wide("The AAC Spellchecker window could not start."))), uintptr(unsafe.Pointer(wide(title))), 0x10)
+		os.Exit(1)
+	}
+	go worker(hwnd)
+	hot, _, _ := registerHotkey.Call(hwnd, 1, 0x4003, 0x77) // Ctrl+Alt+F8, no repeat
+	hotkeyOK = hot != 0
+	if !hotkeyOK {
+		status("Ctrl+Alt+F8 is unavailable. Use Capture field or Paste draft.")
+	}
+	show.Call(hwnd, 5)
+	update.Call(hwnd)
+	var m message
+	for {
+		r, _, _ := getMsg.Call(uintptr(unsafe.Pointer(&m)), 0, 0, 0)
+		if int32(r) <= 0 {
+			break
+		}
+		if m.message >= 0x100 && m.message <= 0x109 {
+			handled, _, _ := isDialog.Call(hwnd, uintptr(unsafe.Pointer(&m)))
+			if handled != 0 {
+				continue
+			}
+		}
+		translate.Call(uintptr(unsafe.Pointer(&m)))
+		dispatch.Call(uintptr(unsafe.Pointer(&m)))
+	}
+}
+
+func create(ex uintptr, class, caption string, style, x, y, w, h, owner, id uintptr) uintptr {
+	r, _, _ := createWin.Call(ex, uintptr(unsafe.Pointer(wide(class))), uintptr(unsafe.Pointer(wide(caption))), style, x, y, w, h, owner, id, instance, 0)
+	return r
+}
+func widget(parent uintptr, id int, class, caption string, style, ex, font uintptr) {
+	h := create(ex, class, caption, style|0x50000000, 0, 0, 1, 1, parent, uintptr(id))
+	controls[id] = h
+	send.Call(h, 0x30, font, 1)
+}
+func makeFont(h, weight int) uintptr {
+	r, _, _ := createFont.Call(uintptr(-h), 0, 0, 0, uintptr(weight), 0, 0, 0, 1, 0, 0, 5, 0, uintptr(unsafe.Pointer(wide("Segoe UI"))))
+	return r
+}
+func initControls(h uintptr) {
+	font, larger = makeFont(18, 400), makeFont(25, 650)
+	widget(h, idHeader, "STATIC", title, 0, 0, larger)
+	widget(h, idHelp, "STATIC", "Press Ctrl+Alt+F8 while focused on the AAC speech field. Or choose Capture field and point at it within five seconds.", 0, 0, font)
+	widget(h, idOriginal, "STATIC", "Original draft", 0, 0, font)
+	widget(h, idPreview, "STATIC", "Review and edit the correction", 0, 0, font)
+	widget(h, idStatus, "STATIC", "Offline English (US) spelling. This app does not press Speak.", 0, 0, font)
+	for _, b := range []struct {
+		id    int
+		label string
+	}{
+		{idCapture, "&Capture field"}, {idPaste, "&Paste draft"}, {idCheck, "Check &spelling"}, {idApply, "&Apply to AAC"},
+		{idUndo, "&Undo AAC fix"}, {idCopy, "C&opy correction"}, {idClear, "C&lear"},
+	} {
+		widget(h, b.id, "BUTTON", b.label, 0x10000, 0, font)
+	}
+	widget(h, idInput, "EDIT", "", 0x211044, 0x200, font)
+	widget(h, idOutput, "EDIT", "", 0x211044, 0x200, font)
+	for _, id := range []int{idInput, idOutput} {
+		send.Call(controls[id], 0xC5, maxDraft, 0)
+	}
+	syncControls()
+}
+func layout(h uintptr) {
+	var rc rect
+	clientRect.Call(h, uintptr(unsafe.Pointer(&rc)))
+	w, v := int(rc.r), int(rc.b)
+	if w < 250 || v < 250 {
+		return
+	}
+	box := func(id, x, y, wi, he int) {
+		move.Call(controls[id], uintptr(x), uintptr(y), uintptr(wi), uintptr(he), 1)
+	}
+	row := func(y int, ids ...int) {
+		width := (w - 32 - 8*(len(ids)-1)) / len(ids)
+		for i, id := range ids {
+			box(id, 16+i*(width+8), y, width, 42)
+		}
+	}
+	box(idHeader, 16, 12, w-32, 31)
+	box(idHelp, 16, 48, w-32, 43)
+	row(97, idCapture, idPaste, idCheck)
+	panel := max(42, (v-318)/2)
+	box(idOriginal, 16, 148, w-32, 23)
+	box(idInput, 16, 173, w-32, panel)
+	py := 179 + panel
+	box(idPreview, 16, py, w-32, 23)
+	box(idOutput, 16, py+25, w-32, panel)
+	row(v-100, idApply, idUndo, idCopy, idClear)
+	box(idStatus, 16, v-50, w-32, 48)
+}
+func wndProc(h uintptr, m uint32, w, l uintptr) uintptr {
+	switch m {
+	case 1:
+		initControls(h)
+		return 0
+	case 2:
+		if hotkeyOK {
+			unregisterHotkey.Call(h, 1)
+		}
+		if font != 0 {
+			deleteGDI.Call(font)
+		}
+		if larger != 0 {
+			deleteGDI.Call(larger)
+		}
+		quit.Call(0)
+		return 0
+	case 5:
+		if controls[idHeader] != 0 {
+			layout(h)
+		}
+		return 0
+	case 0x24:
+		min := point{620, 480}
+		// WM_GETMINMAXINFO supplies a native struct of five POINTs.
+		moveMemory.Call(l+3*unsafe.Sizeof(min), uintptr(unsafe.Pointer(&min)), unsafe.Sizeof(min))
+		return 0
+	case 0x0312:
+		if w == 1 && !busy && !holding {
+			start(task{kind: idCapture})
+			return 0
+		}
+	case 0x0113:
+		if w == 1 && holding {
+			killTimer.Call(h, 1)
+			holding = false
+			var p point
+			ok, _, _ := cursor.Call(uintptr(unsafe.Pointer(&p)))
+			if ok != 0 {
+				start(task{kind: idCapture, at: &p})
+			} else {
+				status("Could not get the pointer location.")
+				syncControls()
+			}
+			return 0
+		}
+	case wmDone:
+		select {
+		case r := <-results:
+			finish(r)
+		default:
+		}
+		return 0
+	case 0x0111:
+		id, n := int(w&0xffff), uint32(w>>16)
+		if n == 0x0300 && (id == idInput || id == idOutput) && !updating && !busy && !holding {
+			if id == idInput && !attached {
+				setBox(idOutput, "")
+				previewValid = false
+				status("Draft changed. Check spelling to refresh the preview.")
+			}
+			syncControls()
+		}
+		if l != 0 && n == 0 && !busy && !holding && id >= idCapture && id <= idClear {
+			action(h, id)
+			return 0
+		}
+	}
+	r, _, _ := defProc.Call(h, uintptr(m), w, l)
+	return r
+}
+
+func setBox(id int, s string) {
+	if id == idInput || id == idOutput {
+		s = matchLineEndings(s, "\r\n")
+	}
+	was := updating
+	updating = true
+	setText.Call(controls[id], uintptr(unsafe.Pointer(wide(s))))
+	updating = was
+}
+func status(s string) { setBox(idStatus, s) }
+func textBox(id int) string {
+	h := controls[id]
+	n, _, _ := getTextLen.Call(h)
+	if n == 0 || n > maxDraft+10000 {
+		return ""
+	}
+	buf := make([]uint16, n+1)
+	getText.Call(h, uintptr(unsafe.Pointer(&buf[0])), n+1)
+	return syscall.UTF16ToString(buf)
+}
+func activateApp() { show.Call(hwnd, 9); activate.Call(hwnd) }
+func start(t task) {
+	busy = true
+	status("Working…")
+	syncControls()
+	jobs <- t
+}
+func finish(r result) {
+	busy = false
+	attached, undo = r.attached, r.undo
+	if r.kind == idCapture || r.kind == idPaste || r.kind == idClear {
+		if r.err == nil || r.original != "" {
+			setBox(idInput, r.original)
+			setBox(idOutput, r.preview)
+			previewValid = r.checked
+		}
+		if r.kind == idCapture {
+			activateApp()
+		}
+	}
+	if r.err == nil && (r.kind == idCheck || r.kind == idApply || r.kind == idUndo) {
+		if r.kind != idCheck {
+			setBox(idInput, r.original)
+		}
+		setBox(idOutput, r.preview)
+		previewValid = r.checked
+	}
+	if r.err != nil {
+		status(r.err.Error())
+	} else {
+		status(r.status)
+	}
+	syncControls()
+	if r.kind == idClear || r.kind == idPaste {
+		setFocus.Call(controls[idInput])
+	}
+	if r.kind == idCapture || r.kind == idCheck {
+		setFocus.Call(controls[idOutput])
+	}
+}
+func syncControls() {
+	idle := !busy && !holding
+	draft, corrected := textBox(idInput), textBox(idOutput)
+	have := strings.TrimSpace(corrected) != ""
+	on := func(id int, yes bool) {
+		var v uintptr
+		if yes {
+			v = 1
+		}
+		enable.Call(controls[id], v)
+	}
+	for _, id := range []int{idCapture, idPaste, idClear} {
+		on(id, idle)
+	}
+	on(idCheck, idle && strings.TrimSpace(draft) != "")
+	on(idApply, idle && attached && have && corrected != draft)
+	on(idUndo, idle && attached && undo)
+	on(idCopy, idle && have)
+	readonly := func(id int, b bool) {
+		var v uintptr
+		if b {
+			v = 1
+		}
+		send.Call(controls[id], 0xCF, v, 0)
+	}
+	readonly(idInput, attached || !idle)
+	readonly(idOutput, !idle || (!previewValid && strings.TrimSpace(draft) == ""))
+}
+
+func action(h uintptr, id int) {
+	switch id {
+	case idCapture:
+		holding = true
+		timer, _, _ := setTimer.Call(h, 1, 5000, 0)
+		if timer == 0 {
+			holding = false
+			status("The capture timer could not start. Try Ctrl+Alt+F8 or Paste draft.")
+			return
+		}
+		status("Point at the AAC Message Window within 5 seconds. The app will minimize.")
+		syncControls()
+		show.Call(h, 6)
+	case idPaste:
+		s, err := loadClipboard(h)
+		if err != nil {
+			status(err.Error())
+			return
+		}
+		start(task{kind: idPaste, s: s})
+	case idCheck:
+		start(task{kind: idCheck, s: textBox(idInput)})
+	case idApply:
+		start(task{kind: idApply, s: textBox(idOutput)})
+	case idUndo:
+		start(task{kind: idUndo})
+	case idCopy:
+		if err := saveClipboard(h, textBox(idOutput)); err != nil {
+			status(err.Error())
+		} else {
+			status("Copied. In AAC, select the old draft and paste the correction.")
+		}
+	case idClear:
+		start(task{kind: idClear})
+	}
+}
+
+func loadClipboard(h uintptr) (string, error) {
+	good, _, _ := openClip.Call(h)
+	if good == 0 {
+		return "", fmt.Errorf("The clipboard is busy. Try again.")
+	}
+	defer closeClip.Call()
+	handle, _, _ := getClip.Call(13)
+	if handle == 0 {
+		return "", fmt.Errorf("No text on the clipboard. Copy the AAC draft first.")
+	}
+	size, _, _ := globalSize.Call(handle)
+	if size < 2 {
+		return "", fmt.Errorf("No readable text on the clipboard.")
+	}
+	ptr, _, _ := globalLock.Call(handle)
+	if ptr == 0 {
+		return "", fmt.Errorf("The clipboard text could not be read.")
+	}
+	defer globalUnlock.Call(handle)
+	units := make([]uint16, min(size/2, maxDraft+1))
+	moveMemory.Call(uintptr(unsafe.Pointer(&units[0])), ptr, uintptr(len(units)*2))
+	end := -1
+	for i, u := range units {
+		if u == 0 {
+			end = i
+			break
+		}
+	}
+	if end == -1 {
+		return "", fmt.Errorf("Clipboard draft exceeds 10,000 characters or is invalid.")
+	}
+	s := syscall.UTF16ToString(units[:end])
+	if strings.TrimSpace(s) == "" {
+		return "", fmt.Errorf("Clipboard has no draft text.")
+	}
+	return s, nil
+}
+
+func saveClipboard(h uintptr, s string) error {
+	buf, err := syscall.UTF16FromString(s)
+	if err != nil || strings.TrimSpace(s) == "" {
+		return fmt.Errorf("There is no correction to copy.")
+	}
+	bytes := uintptr(len(buf) * 2)
+	handle, _, _ := globalAlloc.Call(2, bytes)
+	if handle == 0 {
+		return fmt.Errorf("Windows could not allocate clipboard text.")
+	}
+	owned := true
+	defer func() {
+		if owned {
+			globalFree.Call(handle)
+		}
+	}()
+	ptr, _, _ := globalLock.Call(handle)
+	if ptr == 0 {
+		return fmt.Errorf("Windows could not prepare clipboard text.")
+	}
+	moveMemory.Call(ptr, uintptr(unsafe.Pointer(&buf[0])), bytes)
+	globalUnlock.Call(handle)
+	good, _, _ := openClip.Call(h)
+	if good == 0 {
+		return fmt.Errorf("The clipboard is busy. Try again.")
+	}
+	defer closeClip.Call()
+	good, _, _ = emptyClip.Call()
+	if good == 0 {
+		return fmt.Errorf("Windows could not open the clipboard for copying.")
+	}
+	copied, _, _ := setClip.Call(13, handle)
+	if copied == 0 {
+		return fmt.Errorf("Windows could not copy the correction.")
+	}
+	owned = false
+	return nil
+}

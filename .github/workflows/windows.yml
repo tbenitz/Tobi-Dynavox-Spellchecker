@@ -1,0 +1,31 @@
+name: Build Windows executable
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.5'
+          cache: false
+      - name: Vet
+        run: go vet ./...
+      - name: Test including Windows spelling and automation services
+        run: go test -v ./...
+      - name: Build the portable x64 app
+        run: |
+          New-Item -ItemType Directory -Force dist
+          go build -buildvcs=false -trimpath -ldflags "-s -w -H windowsgui" -o dist/Tobi-Dynavox-Spellchecker.exe .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Tobi-Dynavox-Spellchecker-Windows-x64
+          path: dist/Tobi-Dynavox-Spellchecker.exe
+          if-no-files-found: error

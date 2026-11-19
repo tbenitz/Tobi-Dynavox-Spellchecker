@@ -2,6 +2,11 @@
 
 A portable Windows 10/11 x64 spelling review tool for people composing their own AAC messages. It uses the installed Windows English (US) spelling dictionary and needs no account, AI model, installer, or internet connection to check a draft. It does not record drafts or send them anywhere. This is an independent tool, not a Tobii Dynavox product.
 
+## Download
+
+- [Download the portable Windows EXE](https://raw.githubusercontent.com/tbenitz/Tobi-Dynavox-Spellchecker/main/docs/downloads/Tobi-Dynavox-Spellchecker.exe)
+- [Download the source ZIP](https://raw.githubusercontent.com/tbenitz/Tobi-Dynavox-Spellchecker/main/docs/downloads/Tobi-Dynavox-Spellchecker-source.zip)
+
 ## Check and replace a draft
 
 1. Run **Tobi-Dynavox-Spellchecker.exe**. Leave it open while using your AAC app.
@@ -26,9 +31,7 @@ The TD Snap manual describes these actions. [TD Snap Message Bar and Button Acti
 - Direct write-back has not been verified on a physical Tobii Dynavox device. Test with a short unsent draft first, such as “I wnat a glass of water.”
 - The executable is unsigned. Windows may display its usual warning for a new unsigned app. It does not need administrator privileges.
 
-## Build and host on GitHub
-
-Add this folder's contents, including the hidden `.github` folder, to the root of `Tobi-Dynavox-Spellchecker`. Push to GitHub and open **Actions → Build Windows executable**. After a successful run, the executable is available in the workflow artifact. For a public download, attach the EXE to a GitHub Release.
+## Build from source
 
 To build locally with Go 1.25.5 on 64-bit Windows:
 
